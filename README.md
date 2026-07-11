@@ -2,7 +2,17 @@
 
 > Fullscreen ambient particle atmospheres. Six themed presets across four behaviors. Sprite-cached, DPR-aware, resize-preserving, visibility-paused. One file. Zero dependencies.
 
-[![npm version](https://img.shields.io/npm/v/@zakkster/lite-ambient-fx.svg?style=for-the-badge&color=latest)](https://www.npmjs.com/package/@zakkster/lite-ambient-fx) [![sponsor](https://img.shields.io/badge/sponsor-PeshoVurtoleta-ea4aaa.svg?logo=github)](https://github.com/sponsors/PeshoVurtoleta) [![Zero-Dependency](https://img.shields.io/badge/Dependencies-0-brightgreen?style=for-the-badge)](https://www.npmjs.com/package/@zakkster/lite-ambient-fx) [![bundle size](https://img.shields.io/bundlephobia/minzip/@zakkster/lite-ambient-fx?style=for-the-badge)](https://bundlephobia.com/result?p=@zakkster/lite-ambient-fx) [![TypeScript](https://img.shields.io/badge/TypeScript-Types-informational)](./AmbientFX.d.ts) [![license](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](./LICENSE.txt)
+[![npm version](https://img.shields.io/npm/v/@zakkster/lite-ambient-fx.svg?style=for-the-badge&color=latest)](https://www.npmjs.com/package/@zakkster/lite-ambient-fx)
+![Zero-GC](https://img.shields.io/badge/Zero--GC-Hot%20path-00C853?style=for-the-badge&logo=leaf&logoColor=white)
+[![sponsor](https://img.shields.io/badge/sponsor-PeshoVurtoleta-ea4aaa.svg?logo=github)](https://github.com/sponsors/PeshoVurtoleta)
+[![npm bundle size](https://img.shields.io/bundlephobia/minzip/@zakkster/lite-ambient-fx?style=for-the-badge)](https://bundlephobia.com/result?p=@zakkster/lite-ambient-fx)
+[![npm downloads](https://img.shields.io/npm/dm/@zakkster/lite-ambient-fx?style=for-the-badge&color=blue)](https://www.npmjs.com/package/@zakkster/lite-ambient-fx)
+[![npm total downloads](https://img.shields.io/npm/dt/@zakkster/lite-ambient-fx?style=for-the-badge&color=blue)](https://www.npmjs.com/package/@zakkster/lite-ambient-fx)
+![Tree-Shakeable](https://img.shields.io/badge/tree--shakeable-yes-brightgreen)
+![TypeScript](https://img.shields.io/badge/TypeScript-Types-informational)
+![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
+
 
 Extracted from a scratch-card game where the atmosphere layer had to render behind live UI at 60fps without touching the reactive graph. Six presets ship out of the box; every knob is live-tweakable; the whole thing fits in one `<script type="module">` and one `<canvas>` tag.
 
