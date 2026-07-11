@@ -1,0 +1,210 @@
+# @zakkster/lite-ambient-fx
+
+> Fullscreen ambient particle atmospheres in one file. Six themed presets
+> across four behaviors (EMBER, MIST, FLOAT, CHAOS) plus a registry hook
+> for adding your own. Zero dependencies. Sprite-cached radial gradients,
+> zero-alloc render loop, monomorphic particle shape, DPR-aware,
+> resize-preserving, visibility-paused, delta-time clamped.
+
+## Install
+
+```
+npm install @zakkster/lite-ambient-fx
+```
+
+## Minimal use
+
+```js
+import { createAmbientFX } from "@zakkster/lite-ambient-fx";
+const fx = createAmbientFX(canvasElement, { theme: "Void" });
+```
+
+## Public API
+
+```ts
+type BuiltInBehavior = "EMBER" | "MIST" | "FLOAT" | "CHAOS";
+type BehaviorName = BuiltInBehavior | (string & {});
+type ThemeName = "Fire" | "Night" | "Ice" | "Frost" | "Toxic" | "Void";
+
+interface AmbientConfig {
+    behavior: BehaviorName;
+    colors: string[];
+    spark: string;
+    count: number;
+    wind: { x: number; y: number };
+    decay: number;
+    speed: number;
+    size: number;
+    alpha: number;      // clamped to [0, 1]
+    turbulence: number;
+}
+
+interface AmbientOptions {
+    theme?: ThemeName;                    // default "Fire"
+    overrides?: Partial<AmbientConfig>;    // shallow-merges wind
+    autoStart?: boolean;                   // default true
+}
+
+interface AmbientInstance {
+    setTheme(name: ThemeName): void;
+    updateConfig(overrides: Partial<AmbientConfig>): void;
+    readonly config: AmbientConfig;
+    readonly theme: ThemeName;
+    readonly count: number;
+    readonly running: boolean;
+    pause(): void;
+    resume(): void;
+    destroy(): void;
+}
+
+interface Particle {
+    id: number;
+    color: string;
+    spriteCanvas: HTMLCanvasElement | null;
+    z: number;
+    life: number;
+    x: number; y: number;
+    size: number;
+    vx: number; vy: number;
+    decay: number;
+    maxAlpha: number;
+    anchorX: number; anchorY: number;    // MIST-only, zeroed otherwise
+    pulseOffset: number;                  // MIST-only, zeroed otherwise
+}
+
+interface FrameContext {
+    cfg: AmbientConfig;
+    W: number; H: number;
+    dt: number;         // ms since last frame, clamped to 50
+    ds: number;         // dt / 16
+    timestamp: number;  // RAF-callback timestamp
+    isInit: boolean;
+    getSprite(color: string, logicalSize: number): HTMLCanvasElement;
+    respawn(p: Particle, isInit: boolean): void;
+}
+
+interface BehaviorDefinition {
+    spriteLogical: number;
+    spawn(p: Particle, frame: FrameContext): void;
+    tick(particles: Particle[], ctx: CanvasRenderingContext2D, frame: FrameContext): void;
+}
+
+// Factory
+function createAmbientFX(canvas: HTMLCanvasElement, options?: AmbientOptions): AmbientInstance;
+
+// Registry
+const BEHAVIORS: Record<string, BehaviorDefinition>;
+function registerBehavior(name: string, def: BehaviorDefinition): void;
+
+// Constants
+const VERSION: string;
+const THEMES: Record<ThemeName, AmbientConfig>;
+const THEME_META: Array<{ id: ThemeName; name: string; icon: string; behavior: BuiltInBehavior }>;
+
+// Pure helpers
+function mergeThemeConfig(base: AmbientConfig, overrides: Partial<AmbientConfig> | null): AmbientConfig;
+function validateConfig(cfg: AmbientConfig): AmbientConfig;
+function envelopeAlpha(mode: BuiltInBehavior, life: number, maxAlpha: number): number;
+function sinLut(index: number): number;
+function deltaScale(dtMs: number): number;
+function clearAmbientSpriteCache(colors?: string[]): void;
+```
+
+## Behavior semantics (built-ins)
+
+- **EMBER** -- rising particles with wind + turbulence; 15% "super" sparks
+  with 0.3x decay and 1.5x speed. `life` is 0..1 progress; fade-in 0-0.2,
+  fade-out 0.2-1. `spriteLogical: 64`.
+- **MIST** -- large breathing fog blobs; wrap at edges; sine-LUT breath
+  modulation on alpha and size. `life` is an ms accumulator that wraps at
+  72_000 to avoid Float32 drift. Requires `mix-blend-mode: screen` on
+  the canvas CSS to look right. `spriteLogical: 128`.
+- **FLOAT** -- rising particles with sine-wave horizontal sway; no
+  turbulence. `life` is 0..1; fade-in 0-0.1, sustain, fade-out 0.9-1.
+  `spriteLogical: 64`.
+- **CHAOS** -- random omnidirectional velocity; straight lines; ~7.8Hz
+  bit-flicker on alpha (via `Math.trunc(timestamp / 128)`). `life` is
+  0..1 progress; dies at >=1 or on edge exit. `spriteLogical: 64`.
+
+## Adding a custom behavior
+
+```js
+import { registerBehavior } from "@zakkster/lite-ambient-fx";
+
+registerBehavior("SNOW", {
+    spriteLogical: 64,
+    spawn(p, frame) {
+        // MUST populate every field of `p`. MUST NOT add new fields.
+        // MUST set p.spriteCanvas via frame.getSprite(color, spriteLogical).
+        // ... (see README "Adding a custom behavior" for the full example)
+    },
+    tick(particles, ctx, frame) {
+        // ... own physics + alpha envelope, call frame.respawn(p, false) on death.
+    },
+});
+```
+
+The `Particle` shape is monomorphic -- every field (including MIST-only
+`anchorX`/`anchorY`/`pulseOffset`) is present on every particle. Custom
+behaviors zero out the fields they don't use.
+
+## Configuration semantics
+
+- `updateConfig` changes take effect for **new spawns**; alive particles
+  keep the values baked at spawn. Sliding a knob feels smooth this way.
+- `wind` on `overrides` shallow-merges: `{ wind: { x: 1 } }` preserves
+  the existing `y`.
+- `overrides.colors` or `overrides.spark` triggers targeted sprite-cache
+  eviction of the previous palette.
+- `overrides.behavior` re-primes sprites (mist vs core sprite logical
+  sizes differ) and re-inits the particle pool.
+- `overrides.count` re-inits the pool (grow or trim tail).
+
+## Sizing
+
+Canvas should be a fullscreen overlay:
+
+```css
+canvas#fx {
+    position: fixed;
+    inset: 0;
+    width: 100dvw;
+    height: 100dvh;
+    z-index: 0;
+    mix-blend-mode: screen;
+    pointer-events: none;
+}
+```
+
+The module handles DPR internally; sprites are rasterized at
+`logicalSize x devicePixelRatio`.
+
+## Performance envelope
+
+- Target: 40-500 particles as an atmosphere layer behind normal UI.
+- Not the tool for 10 000+ particles. Reach for an SoA GPU pipeline instead.
+- Zero allocation on the render loop:
+  - Nested `Map<color, Map<physical, canvas>>` sprite cache -- no key
+    strings.
+  - Sprite reference cached on the particle at spawn time -- no
+    per-frame `getSprite` calls.
+  - Particle shape monomorphic -- all fields present at push time.
+  - Behavior dispatch hoisted outside the loop -- one lookup per frame.
+  - Pooled `FrameContext` -- allocated once, mutated per frame.
+- Shared 360-entry Float32 sine LUT constructed once at module load.
+
+## Runtime targets
+
+- ES2020 + Canvas 2D.
+- Chrome/Edge/Firefox (last two majors), Safari 14+, Twitch Extensions.
+- Node 18+ (for tests only, under a minimal DOM shim).
+- Not SSR-safe to construct; module import is safe (no top-level DOM
+  access).
+
+## Zero-dependency pledge
+
+No runtime imports from anywhere. Single-file ESM. `sideEffects: false`.
+
+## License
+
+MIT (c) Zahary Shinikchiev
