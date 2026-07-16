@@ -26,6 +26,7 @@ const {
     deltaScale,
     sinLut,
     envelopeAlpha,
+    degradeForReducedMotion,
 } = await import('../AmbientFX.js');
 
 describe('VERSION parity', () => {
@@ -40,9 +41,9 @@ describe('VERSION parity', () => {
 });
 
 describe('THEMES surface', () => {
-    const NAMES = ['Fire', 'Night', 'Ice', 'Frost', 'Toxic', 'Void'];
+    const NAMES = ['Fire', 'Night', 'Ice', 'Frost', 'Toxic', 'Void', 'Dust', 'Aurora', 'Abyss'];
 
-    test('exactly six themes ship', () => {
+    test('exactly nine themes ship', () => {
         assert.deepEqual(Object.keys(THEMES).sort(), NAMES.slice().sort());
     });
 
@@ -61,6 +62,12 @@ describe('THEMES surface', () => {
             assert.equal(typeof t.wind.x, 'number', name);
             assert.equal(typeof t.wind.y, 'number', name);
         }
+    });
+
+    test('THEMES is a null-prototype registry (no inherited keys)', () => {
+        assert.equal(Object.getPrototypeOf(THEMES), null);
+        assert.equal(THEMES['constructor'], undefined);
+        assert.equal(THEMES['toString'], undefined);
     });
 
     test('THEME_META covers every theme with a matching behavior', () => {
@@ -227,5 +234,91 @@ describe('envelopeAlpha -- MIST and CHAOS pass through', () => {
 
     test('CHAOS returns maxAlpha untouched (shaped elsewhere)', () => {
         assert.equal(envelopeAlpha('CHAOS', 0.5, 0.9), 0.9);
+    });
+});
+
+// ---- v1.1.0: validateConfig now guards the fields the tick loops read raw ----
+describe('validateConfig -- hot-path field guards (v1.1.0)', () => {
+    const complete = () => ({ ...THEMES.Fire, wind: { ...THEMES.Fire.wind } });
+
+    test('rejects a config with no wind vector', () => {
+        const bad = complete(); delete bad.wind;
+        assert.throws(() => validateConfig(bad), TypeError);
+    });
+
+    test('rejects a non-numeric or non-finite wind component', () => {
+        assert.throws(() => validateConfig({ ...complete(), wind: { x: 0 } }), TypeError);
+        assert.throws(() => validateConfig({ ...complete(), wind: { x: NaN, y: 0 } }), TypeError);
+        assert.throws(() => validateConfig({ ...complete(), wind: { x: Infinity, y: 0 } }), TypeError);
+    });
+
+    test('rejects missing decay / speed / size / turbulence', () => {
+        for (const key of ['decay', 'speed', 'size', 'turbulence']) {
+            const bad = complete(); delete bad[key];
+            assert.throws(() => validateConfig(bad), RangeError, 'missing ' + key);
+        }
+    });
+
+    test('rejects negative or non-finite numeric fields', () => {
+        assert.throws(() => validateConfig({ ...complete(), size: -1 }), RangeError);
+        assert.throws(() => validateConfig({ ...complete(), speed: NaN }), RangeError);
+        assert.throws(() => validateConfig({ ...complete(), turbulence: Infinity }), RangeError);
+    });
+
+    test('rejects a missing or empty spark color', () => {
+        const bad = complete(); delete bad.spark;
+        assert.throws(() => validateConfig(bad), TypeError);
+        assert.throws(() => validateConfig({ ...complete(), spark: '' }), TypeError);
+    });
+
+    test('a partial theme -- the registerTheme hazard -- no longer slips through', () => {
+        const partial = { behavior: 'EMBER', colors: ['#fff'], spark: '#fff', count: 10, alpha: 1 };
+        assert.throws(() => validateConfig(mergeThemeConfig(partial, null)));
+    });
+
+    test('all nine built-in presets still pass the stricter guard', () => {
+        for (const name of Object.keys(THEMES)) {
+            assert.doesNotThrow(() => validateConfig(THEMES[name]), name);
+        }
+    });
+});
+
+// ---- v1.1.0: the pure reduced-motion transform ----
+describe('degradeForReducedMotion', () => {
+    test('clamps count into [8, 40] and keeps it an integer', () => {
+        const big = degradeForReducedMotion({ ...THEMES.Fire });
+        assert.ok(big.count >= 8 && big.count <= 40, 'count=' + big.count);
+        assert.equal(big.count | 0, big.count);
+        const tiny = degradeForReducedMotion({ ...THEMES.Fire, count: 2 });
+        assert.equal(tiny.count, 8, 'floors at 8');
+    });
+
+    test('lowers speed and turbulence but never below the speed floor', () => {
+        const d = degradeForReducedMotion({ ...THEMES.Fire });
+        assert.ok(d.speed < THEMES.Fire.speed && d.speed >= 0.05);
+        assert.ok(d.turbulence < THEMES.Fire.turbulence);
+        const slow = degradeForReducedMotion({ ...THEMES.Fire, speed: 0 });
+        assert.equal(slow.speed, 0.05);
+    });
+
+    test('preserves palette, spark and behavior', () => {
+        const d = degradeForReducedMotion(THEMES.Aurora);
+        assert.deepEqual(d.colors, THEMES.Aurora.colors);
+        assert.equal(d.spark, THEMES.Aurora.spark);
+        assert.equal(d.behavior, THEMES.Aurora.behavior);
+    });
+
+    test('is pure -- clones wind, never mutates the input', () => {
+        const src = { ...THEMES.Fire, wind: { ...THEMES.Fire.wind } };
+        const snapshot = JSON.stringify(src);
+        const d = degradeForReducedMotion(src);
+        assert.equal(JSON.stringify(src), snapshot, 'input untouched');
+        assert.notEqual(d.wind, src.wind, 'wind is a fresh object');
+    });
+
+    test('output is still a valid config', () => {
+        for (const name of Object.keys(THEMES)) {
+            assert.doesNotThrow(() => validateConfig(degradeForReducedMotion(THEMES[name])), name);
+        }
     });
 });

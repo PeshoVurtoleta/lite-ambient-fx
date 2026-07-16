@@ -1,27 +1,34 @@
 /**
  * @zakkster/lite-ambient-fx
  *
- * Full-screen ambient particle atmospheres in one file. Six themed presets
- * (Fire, Night, Ice, Frost, Toxic, Void) across four particle behaviors
- * (EMBER, MIST, FLOAT, CHAOS), plus a registry hook for adding your own.
+ * Full-screen ambient particle atmospheres in one file. Nine themed presets
+ * (Fire, Night, Ice, Frost, Toxic, Void, Dust, Aurora, Abyss) across four
+ * particle behaviors (EMBER, MIST, FLOAT, CHAOS), plus registry hooks for
+ * custom themes (`registerTheme`) and behaviors (`registerBehavior`).
  * Sprite-cached radial gradients, zero-alloc render loop, monomorphic
  * particle shape, DPR-aware rasterization, delta-time scaled,
- * resize-preserving, visibility-paused. Zero runtime dependencies.
+ * resize-preserving, visibility-paused, and `prefers-reduced-motion`
+ * auto-degrade. Zero runtime dependencies. One file.
  *
  * (c) 2026 Zahary Shinikchiev. MIT.
  */
 
-export const VERSION = '1.0.0';
+export const VERSION = '1.1.0';
 
 // ============================================================
 //  THEME PRESETS
 // ============================================================
 
 /**
- * Six shipped presets. Each is a full config; `behavior` is a key into the
+ * Nine shipped presets. Each is a full config; `behavior` is a key into the
  * BEHAVIORS registry; every other field is live-tunable via updateConfig.
+ *
+ * Null-prototype, exactly like BEHAVIORS: THEMES is a *registry* as of v1.1.0
+ * (see registerTheme), so it must not inherit `constructor`, `toString`, or a
+ * `__proto__` setter from Object.prototype. A plain literal would make
+ * `THEMES['constructor']` truthy -- enough to slip past the unknown-theme guard.
  */
-export const THEMES = {
+export const THEMES = Object.assign(Object.create(null), {
     Fire: {
         behavior: 'EMBER',
         colors: ['#ff4500', '#ff7f50', '#ffd700'],
@@ -94,9 +101,51 @@ export const THEMES = {
         alpha: 0.9,
         turbulence: 0.5,
     },
-};
 
-/** Human-readable metadata for UI builders. */
+    // ---- v1.1.0 presets (existing behaviors; Snow + FALL land in v1.2.0) ----
+    Dust: {
+        behavior: 'FLOAT',
+        colors: ['#d2b48c', '#8b7355', '#a0522d'],
+        spark: '#f5deb3',
+        count: 120,
+        wind: { x: 0.3, y: -0.1 },
+        decay: 0.0008,
+        speed: 0.4,
+        size: 6,
+        alpha: 0.6,
+        turbulence: 0.3,
+    },
+    Aurora: {
+        behavior: 'MIST',
+        colors: ['#00ff9f', '#00bfff', '#7b2cbf'],
+        spark: '#ffffff',
+        count: 35,
+        wind: { x: 0.8, y: 0.1 },
+        decay: 0.0002,
+        speed: 0.8,
+        size: 180,
+        alpha: 0.12,
+        turbulence: 0.6,
+    },
+    Abyss: {
+        behavior: 'CHAOS',
+        colors: ['#000080', '#191970', '#4b0082'],
+        spark: '#00ffff',
+        count: 180,
+        wind: { x: 0, y: 0 },
+        decay: 0.015,
+        speed: 1.2,
+        size: 4,
+        alpha: 0.85,
+        turbulence: 0.8,
+    },
+});
+
+/**
+ * Human-readable metadata for UI builders (theme pickers, playgrounds).
+ * `registerTheme()` appends/updates entries here automatically, so a picker
+ * built against THEME_META keeps working without modification.
+ */
 export const THEME_META = [
     { id: 'Fire',  name: 'Inferno',     icon: 'flame',  behavior: 'EMBER' },
     { id: 'Night', name: 'Stardust',    icon: 'sparks', behavior: 'EMBER' },
@@ -104,6 +153,9 @@ export const THEME_META = [
     { id: 'Frost', name: 'Deep Fog',    icon: 'fog',    behavior: 'MIST'  },
     { id: 'Toxic', name: 'Biohazard',   icon: 'radio',  behavior: 'FLOAT' },
     { id: 'Void',  name: 'Dark Matter', icon: 'orb',    behavior: 'CHAOS' },
+    { id: 'Dust',   name: 'Dust Veil',   icon: 'wind',  behavior: 'FLOAT' },
+    { id: 'Aurora', name: 'Aurora',      icon: 'wave',  behavior: 'MIST'  },
+    { id: 'Abyss',  name: 'Abyss',       icon: 'hole',  behavior: 'CHAOS' },
 ];
 
 // ============================================================
@@ -257,8 +309,104 @@ export function validateConfig(cfg) {
     if (typeof cfg.alpha !== 'number' || cfg.alpha < 0 || cfg.alpha > 1) {
         throw new RangeError('AmbientFX: alpha must be in [0,1]');
     }
+    if (typeof cfg.spark !== 'string' || cfg.spark.length === 0) {
+        throw new TypeError('AmbientFX: spark must be a non-empty color string');
+    }
+    // v1.1.0 -- these were unchecked. Every one is read raw by the hot loop
+    // (`cfg.wind.x`, `cfg.size`, `cfg.speed`, ...), so an absent field became
+    // `undefined` -> NaN positions -> particles silently vanish, no throw.
+    // Harmless while THEMES was a closed set of complete presets; a live hazard
+    // now that registerTheme accepts third-party configs.
+    if (!cfg.wind || typeof cfg.wind.x !== 'number' || typeof cfg.wind.y !== 'number'
+        || !Number.isFinite(cfg.wind.x) || !Number.isFinite(cfg.wind.y)) {
+        throw new TypeError('AmbientFX: wind must be { x: number, y: number }');
+    }
+    for (let i = 0; i < NUMERIC_FIELDS.length; i++) {
+        const key = NUMERIC_FIELDS[i];
+        const v = cfg[key];
+        if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) {
+            throw new RangeError('AmbientFX: ' + key + ' must be a finite non-negative number');
+        }
+    }
     return cfg;
 }
+
+/** Fields the behavior tick loops read raw. All must be finite and >= 0. */
+const NUMERIC_FIELDS = ['decay', 'speed', 'size', 'turbulence'];
+
+/** Look up a theme by name. Mirrors resolveBehavior's error shape. */
+function resolveTheme(name) {
+    const t = THEMES[name];
+    if (t === undefined) {
+        throw new RangeError('AmbientFX: unknown theme "' + name + '"; registered: ' + Object.keys(THEMES).join(', '));
+    }
+    return t;
+}
+
+/** Default THEME_META icon per built-in behavior. Keeps the existing vocabulary. */
+const DEFAULT_ICONS = Object.assign(Object.create(null), {
+    EMBER: 'sparks', MIST: 'fog', FLOAT: 'wind', CHAOS: 'orb',
+});
+
+/**
+ * Register a custom theme preset, or override a built-in. The theme is instantly
+ * usable via createAmbientFX({ theme }) and setTheme(), and is reflected in
+ * THEME_META so existing theme pickers keep working with no code change.
+ *
+ * `config` must be a COMPLETE preset (same shape as a built-in) -- it is run
+ * through validateConfig, which as of v1.1.0 rejects missing wind/size/speed/
+ * decay/turbulence rather than letting them NaN out the render loop.
+ *
+ * @param {string} name
+ * @param {AmbientConfig} config
+ * @param {{ name?: string, icon?: string }} [meta] Optional display metadata.
+ *   Omitted fields fall back to the existing entry (when overriding a built-in),
+ *   then to a de-camelCased name and a behavior-derived icon.
+ */
+export function registerTheme(name, config, meta) {
+    if (typeof name !== 'string' || name.length === 0) {
+        throw new TypeError('registerTheme: name must be a non-empty string');
+    }
+    if (!config || typeof config !== 'object') {
+        throw new TypeError('registerTheme: config must be an object');
+    }
+    const validated = validateConfig(mergeThemeConfig(config, null));
+    THEMES[name] = validated;
+
+    const idx = THEME_META.findIndex((m) => m.id === name);
+    const prev = idx >= 0 ? THEME_META[idx] : null;
+    const entry = {
+        id: name,
+        name: (meta && meta.name) || (prev && prev.name)
+            || name.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/^[a-z]/, (c) => c.toUpperCase()),
+        icon: (meta && meta.icon) || (prev && prev.icon) || DEFAULT_ICONS[validated.behavior] || 'orb',
+        behavior: validated.behavior,
+    };
+    if (idx >= 0) THEME_META[idx] = entry; else THEME_META.push(entry);
+    return validated;
+}
+
+/**
+ * Degrade a config for `prefers-reduced-motion: reduce`. Low count, low speed,
+ * calmer turbulence -- theme colors and palette stay intact so the atmosphere is
+ * still recognizable, just still-ish. Pure; returns a fresh object.
+ */
+export function degradeForReducedMotion(cfg) {
+    return {
+        ...cfg,
+        wind: { ...cfg.wind },
+        count: Math.max(REDUCED_COUNT_MIN, Math.min(REDUCED_COUNT_MAX, (cfg.count * REDUCED_COUNT_SCALE) | 0)),
+        speed: Math.max(REDUCED_SPEED_MIN, cfg.speed * REDUCED_SPEED_SCALE),
+        turbulence: cfg.turbulence * REDUCED_TURBULENCE_SCALE,
+    };
+}
+
+const REDUCED_COUNT_SCALE = 0.2;
+const REDUCED_COUNT_MIN = 8;
+const REDUCED_COUNT_MAX = 40;
+const REDUCED_SPEED_SCALE = 0.35;
+const REDUCED_SPEED_MIN = 0.05;
+const REDUCED_TURBULENCE_SCALE = 0.6;
 
 /**
  * Delta-time scale factor. Frame velocities are tuned at 60fps; multiply
@@ -636,14 +784,38 @@ export function createAmbientFX(canvas, options) {
     }
     const opts = options || {};
     const themeName = opts.theme || 'Fire';
-    const themeBase = THEMES[themeName];
-    if (!themeBase) throw new RangeError('AmbientFX: unknown theme "' + themeName + '"');
+    const themeBase = resolveTheme(themeName);
 
     const ctx = canvas.getContext('2d', { alpha: true });
     if (!ctx) throw new Error('AmbientFX: 2d context unavailable on this canvas');
 
-    let cfg = validateConfig(mergeThemeConfig(themeBase, opts.overrides));
+    // --- prefers-reduced-motion (v1.1.0) -------------------------------------
+    // On by default, zero developer effort. Opt out with `reducedMotion: false`.
+    // `baseCfg` is the source of truth (what the dev asked for); `cfg` is what we
+    // actually render (baseCfg, degraded when the media query matches). Keeping
+    // both means we can restore full motion if the user flips the OS setting mid-
+    // session, instead of being stuck degraded until reload.
+    const respectReduced = opts.reducedMotion !== false;
+    const reduceMedia = (respectReduced && typeof window !== 'undefined' && typeof window.matchMedia === 'function')
+        ? window.matchMedia('(prefers-reduced-motion: reduce)')
+        : null;
+    let isReduced = !!(reduceMedia && reduceMedia.matches);
+
+    let baseCfg = validateConfig(mergeThemeConfig(themeBase, opts.overrides));
+    let cfg = isReduced ? degradeForReducedMotion(baseCfg) : baseCfg;
     let currentThemeName = themeName;
+
+    /** Re-derive `cfg` from `baseCfg` + the current reduced-motion state. */
+    function applyCfg(nextBase, refreshSprites) {
+        const prevColors = uniqueColors(cfg);
+        baseCfg = nextBase;
+        cfg = isReduced ? degradeForReducedMotion(baseCfg) : baseCfg;
+        if (refreshSprites) {
+            clearAmbientSpriteCache(prevColors);
+            primeSprites();
+        }
+        initParticles();
+    }
 
     // Monomorphic particle pool.
     /** @type {Array<Object>} */
@@ -779,6 +951,24 @@ export function createAmbientFX(canvas, options) {
     }
     document.addEventListener('visibilitychange', onVisibility);
 
+    // Live reduced-motion tracking. Without this the preference is a snapshot
+    // taken at construction; a user toggling it in OS settings would see no
+    // change until reload. Torn down in destroy().
+    function onReduceChange(e) {
+        if (destroyed) return;
+        const next = !!e.matches;
+        if (next === isReduced) return;
+        isReduced = next;
+        applyCfg(baseCfg, false);
+    }
+    if (reduceMedia) {
+        if (typeof reduceMedia.addEventListener === 'function') {
+            reduceMedia.addEventListener('change', onReduceChange);
+        } else if (typeof reduceMedia.addListener === 'function') {
+            reduceMedia.addListener(onReduceChange); // Safari < 14
+        }
+    }
+
     let ro = null;
     let resizeScheduled = false;
     if (typeof ResizeObserver !== 'undefined') {
@@ -805,32 +995,34 @@ export function createAmbientFX(canvas, options) {
     return {
         setTheme(name) {
             if (destroyed) return;
-            const base = THEMES[name];
-            if (!base) throw new RangeError('AmbientFX: unknown theme "' + name + '"');
-            const prevColors = uniqueColors(cfg);
-            cfg = validateConfig(mergeThemeConfig(base, null));
+            const base = resolveTheme(name);
             currentThemeName = name;
-            clearAmbientSpriteCache(prevColors);
-            primeSprites();
-            initParticles();
+            applyCfg(validateConfig(mergeThemeConfig(base, null)), true);
         },
 
         updateConfig(overrides) {
             if (destroyed || !overrides) return;
-            const prevColors = uniqueColors(cfg);
-            const prevBehavior = cfg.behavior;
-            cfg = validateConfig(mergeThemeConfig(cfg, overrides));
-            const behaviorChanged = cfg.behavior !== prevBehavior;
-            if (overrides.colors !== undefined || overrides.spark !== undefined || behaviorChanged) {
-                clearAmbientSpriteCache(prevColors);
-                primeSprites();
-            }
-            if (overrides.count !== undefined || behaviorChanged) initParticles();
+            const prevBehavior = baseCfg.behavior;
+            const next = validateConfig(mergeThemeConfig(baseCfg, overrides));
+            const behaviorChanged = next.behavior !== prevBehavior;
+            const spritesDirty = overrides.colors !== undefined
+                || overrides.spark !== undefined
+                || behaviorChanged;
+            applyCfg(next, spritesDirty);
         },
 
+        /** The config actually being rendered (degraded when reduced-motion is active). */
         get config() {
             return { ...cfg, wind: { ...cfg.wind } };
         },
+
+        /** The config as requested, before any reduced-motion degrade. */
+        get baseConfig() {
+            return { ...baseCfg, wind: { ...baseCfg.wind } };
+        },
+
+        /** True when prefers-reduced-motion is matching and not opted out. */
+        get reducedMotion() { return isReduced; },
 
         get theme() { return currentThemeName; },
 
@@ -857,6 +1049,13 @@ export function createAmbientFX(canvas, options) {
             running = false;
             if (raf !== null) { cancelAnimationFrame(raf); raf = null; }
             document.removeEventListener('visibilitychange', onVisibility);
+            if (reduceMedia) {
+                if (typeof reduceMedia.removeEventListener === 'function') {
+                    reduceMedia.removeEventListener('change', onReduceChange);
+                } else if (typeof reduceMedia.removeListener === 'function') {
+                    reduceMedia.removeListener(onReduceChange);
+                }
+            }
             if (ro !== null) { ro.disconnect(); ro = null; }
             const palette = uniqueColors(cfg);
             clearAmbientSpriteCache(palette);

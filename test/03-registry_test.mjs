@@ -93,6 +93,8 @@ const {
     createAmbientFX,
     clearAmbientSpriteCache,
     THEMES,
+    THEME_META,
+    registerTheme,
     validateConfig,
 } = await import('../AmbientFX.js');
 
@@ -370,5 +372,115 @@ describe('frame context -- spawn contract', () => {
         } finally {
             delete BEHAVIORS.KILL;
         }
+    });
+});
+
+// ============================================================
+//  v1.1.0 -- THEME registry
+// ============================================================
+
+const CUSTOM = () => ({
+    behavior: 'EMBER',
+    colors: ['#123456', '#654321'],
+    spark: '#abcdef',
+    count: 42,
+    wind: { x: 0.1, y: -0.2 },
+    decay: 0.004,
+    speed: 1.1,
+    size: 9,
+    alpha: 0.7,
+    turbulence: 0.4,
+});
+
+describe('registerTheme', () => {
+    test('rejects a bad name', () => {
+        assert.throws(() => registerTheme('', CUSTOM()), TypeError);
+        assert.throws(() => registerTheme(null, CUSTOM()), TypeError);
+    });
+
+    test('rejects a non-object config', () => {
+        assert.throws(() => registerTheme('Bad', null), TypeError);
+        assert.throws(() => registerTheme('Bad', 'nope'), TypeError);
+    });
+
+    test('rejects an unregistered behavior', () => {
+        assert.throws(() => registerTheme('Bad', { ...CUSTOM(), behavior: 'NOPE' }), RangeError);
+    });
+
+    test('rejects an incomplete config instead of NaN-ing the render loop', () => {
+        const partial = { behavior: 'EMBER', colors: ['#fff'], spark: '#fff', count: 10, alpha: 1 };
+        assert.throws(() => registerTheme('Partial', partial));
+        assert.equal(THEMES['Partial'], undefined, 'nothing was stored');
+    });
+
+    test('registers into THEMES and returns the validated config', () => {
+        const out = registerTheme('Neon', CUSTOM());
+        assert.ok(THEMES.Neon, 'present in THEMES');
+        assert.equal(THEMES.Neon.count, 42);
+        assert.equal(out.behavior, 'EMBER');
+        assert.notEqual(THEMES.Neon.wind, CUSTOM().wind, 'wind is cloned, not aliased');
+    });
+
+    test('appends to THEME_META so existing pickers keep working', () => {
+        registerTheme('SolarFlare', CUSTOM());
+        const meta = THEME_META.find((m) => m.id === 'SolarFlare');
+        assert.ok(meta, 'meta entry created');
+        assert.equal(meta.name, 'Solar Flare', 'de-camelCased display name');
+        assert.equal(meta.icon, 'sparks', 'icon derived from the EMBER behavior');
+        assert.equal(meta.behavior, 'EMBER');
+    });
+
+    test('accepts explicit display metadata', () => {
+        registerTheme('Xx', CUSTOM(), { name: 'Custom Vibe', icon: 'orb' });
+        const meta = THEME_META.find((m) => m.id === 'Xx');
+        assert.equal(meta.name, 'Custom Vibe');
+        assert.equal(meta.icon, 'orb');
+    });
+
+    test('overriding a built-in preserves its curated meta by default', () => {
+        const before = THEME_META.find((m) => m.id === 'Fire');
+        assert.equal(before.name, 'Inferno');
+        registerTheme('Fire', { ...CUSTOM(), count: 7 });
+        const after = THEME_META.find((m) => m.id === 'Fire');
+        assert.equal(after.name, 'Inferno', 'curated name kept');
+        assert.equal(THEMES.Fire.count, 7, 'config replaced');
+        assert.equal(THEME_META.filter((m) => m.id === 'Fire').length, 1, 'no duplicate meta row');
+    });
+
+    test('a registered theme mounts end-to-end through createAmbientFX', () => {
+        registerTheme('Mountable', CUSTOM());
+        const fx = createAmbientFX(makeCanvas(), { theme: 'Mountable', autoStart: false });
+        assert.equal(fx.theme, 'Mountable');
+        assert.equal(fx.count, 42);
+        fx.destroy();
+    });
+
+    test('setTheme() swaps to a registered theme', () => {
+        registerTheme('Swappable', { ...CUSTOM(), count: 11 });
+        const fx = createAmbientFX(makeCanvas(), { theme: 'Void', autoStart: false });
+        fx.setTheme('Swappable');
+        assert.equal(fx.theme, 'Swappable');
+        assert.equal(fx.count, 11);
+        fx.destroy();
+    });
+
+    test('unknown theme throws a RangeError listing what is registered', () => {
+        assert.throws(
+            () => createAmbientFX(makeCanvas(), { theme: 'Nonexistent' }),
+            (e) => e instanceof RangeError && e.message.includes('registered:'),
+        );
+    });
+
+    test('THEMES has no inherited keys -- Object.prototype cannot be used as a theme', () => {
+        assert.equal(THEMES['constructor'], undefined);
+        assert.throws(() => createAmbientFX(makeCanvas(), { theme: 'constructor' }), RangeError);
+        assert.throws(() => createAmbientFX(makeCanvas(), { theme: 'toString' }), RangeError);
+    });
+
+    test("registerTheme('__proto__') creates a real own key, not a prototype write", () => {
+        registerTheme('__proto__', CUSTOM());
+        assert.ok(Object.keys(THEMES).includes('__proto__'), 'stored as an own key');
+        assert.equal(Object.getPrototypeOf(THEMES), null, 'prototype untouched');
+        assert.equal(THEMES['__proto__'].count, 42);
     });
 });

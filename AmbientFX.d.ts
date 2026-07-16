@@ -11,7 +11,12 @@ export type BuiltInBehavior = 'EMBER' | 'MIST' | 'FLOAT' | 'CHAOS';
  */
 export type BehaviorName = BuiltInBehavior | (string & {});
 
-export type ThemeName = 'Fire' | 'Night' | 'Ice' | 'Frost' | 'Toxic' | 'Void';
+export type BuiltInTheme =
+    | 'Fire' | 'Night' | 'Ice' | 'Frost' | 'Toxic' | 'Void'
+    | 'Dust' | 'Aurora' | 'Abyss';
+
+/** Any registered theme name -- widened because users add their own via `registerTheme`. */
+export type ThemeName = BuiltInTheme | (string & {});
 
 export interface WindVector {
     x: number;
@@ -50,12 +55,31 @@ export interface AmbientOptions {
     overrides?: Partial<AmbientConfig>;
     /** Start the RAF loop immediately. Defaults to true. */
     autoStart?: boolean;
+    /**
+     * Respect `prefers-reduced-motion: reduce`. Defaults to `true` -- zero config.
+     * When the media query matches, the instance renders a degraded config:
+     * low particle count (8..40), ~0.35x speed, calmer turbulence. Palette and
+     * behavior are preserved, so the atmosphere stays recognizable.
+     *
+     * Tracked live: flipping the OS setting mid-session degrades or restores
+     * without a reload. Set `false` to force full motion regardless.
+     *
+     * Note: while active, the degrade is re-applied after every `setTheme()` and
+     * `updateConfig()` -- a user's accessibility preference outranks a dev's
+     * `count` knob. Use `reducedMotion: false` if you need to override it.
+     */
+    reducedMotion?: boolean;
 }
 
 export interface AmbientInstance {
     setTheme(name: ThemeName): void;
     updateConfig(overrides: Partial<AmbientConfig>): void;
+    /** The config actually being rendered (degraded when reduced-motion is active). */
     readonly config: AmbientConfig;
+    /** The config as requested, before any reduced-motion degrade. */
+    readonly baseConfig: AmbientConfig;
+    /** True while `prefers-reduced-motion: reduce` matches and it is not opted out. */
+    readonly reducedMotion: boolean;
     readonly theme: ThemeName;
     readonly count: number;
     readonly running: boolean;
@@ -133,7 +157,7 @@ export interface BehaviorDefinition {
 export const VERSION: string;
 
 /** Six shipped presets, keyed by theme name. */
-export const THEMES: Record<ThemeName, AmbientConfig>;
+export const THEMES: Record<BuiltInTheme, AmbientConfig> & Record<string, AmbientConfig>;
 
 /** Human-readable metadata for UI builders. */
 export const THEME_META: ThemeMeta[];
@@ -147,6 +171,34 @@ export const BEHAVIORS: Record<string, BehaviorDefinition>;
 
 /** Register a custom behavior (or replace a built-in). Throws on invalid def. */
 export function registerBehavior(name: string, def: BehaviorDefinition): void;
+
+/** Optional display metadata for a registered theme. */
+export interface ThemeMetaInput {
+    /** Display name for pickers. Defaults to a de-camelCased `name`. */
+    name?: string;
+    /** Icon hint. Defaults to the behavior's icon ('sparks' | 'fog' | 'wind' | 'orb'). */
+    icon?: string;
+}
+
+/**
+ * Register a custom theme preset, or override a built-in. Instantly usable via
+ * `createAmbientFX({ theme })` and `setTheme()`, and mirrored into `THEME_META`
+ * so an existing theme picker keeps working unchanged.
+ *
+ * `config` must be a COMPLETE preset -- it is run through `validateConfig`, which
+ * rejects a missing `wind`, `size`, `speed`, `decay`, or `turbulence` rather than
+ * letting them reach the tick loop as `undefined`.
+ *
+ * @returns the validated, stored config.
+ */
+export function registerTheme(name: string, config: AmbientConfig, meta?: ThemeMetaInput): AmbientConfig;
+
+/**
+ * The pure reduced-motion transform: low count (8..40), 0.35x speed, 0.6x
+ * turbulence, palette untouched. Exported for tests and for callers who want to
+ * apply the same degrade to their own configs.
+ */
+export function degradeForReducedMotion(cfg: AmbientConfig): AmbientConfig;
 
 /** Drop cached sprites by color, or the entire cache when `colors` is omitted. */
 export function clearAmbientSpriteCache(colors?: string[]): void;

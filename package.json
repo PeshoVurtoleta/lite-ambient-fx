@@ -1,7 +1,7 @@
 {
     "name": "@zakkster/lite-ambient-fx",
-    "version": "1.0.0",
-    "description": "Zero-dependency fullscreen ambient particle atmospheres. Six themed presets across four behaviors. Sprite-cached, DPR-aware, resize-preserving, visibility-paused. One file.",
+    "version": "1.1.0",
+    "description": "Zero-dependency fullscreen ambient particle atmospheres. Nine themed presets across four behaviors. Runtime theme & behavior registries, prefers-reduced-motion auto-degrade, sprite-cached, DPR-aware, resize-preserving, visibility-paused. One file.",
     "type": "module",
     "main": "./AmbientFX.js",
     "module": "./AmbientFX.js",
@@ -38,7 +38,12 @@
         "background",
         "presets",
         "single-file",
-        "zakkster"
+        "zakkster",
+        "themes",
+        "registry",
+        "accessibility",
+        "prefers-reduced-motion",
+        "a11y"
     ],
     "author": "Zahary Shinikchiev <shinikchiev@yahoo.com>",
     "license": "MIT",

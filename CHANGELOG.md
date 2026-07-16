@@ -5,6 +5,32 @@ All notable changes to `@zakkster/lite-ambient-fx` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] — 2026-07-14
+
+### Added
+- **`registerTheme(name, config, meta?)`** — `THEMES` is now a runtime-extensible registry, like `BEHAVIORS`. A registered theme is instantly usable via `createAmbientFX({ theme })` and `setTheme()`, and is mirrored into `THEME_META`, so playgrounds and theme pickers built against `THEME_META` keep working with no code change. Optional `meta` sets the display name and icon; overriding a built-in preserves its curated meta unless you replace it. Returns the validated config.
+- **Three new presets on existing behaviors**: `Dust` (FLOAT — earthy tan motes on a slow draft), `Aurora` (MIST — wide cyan/green/violet curtains at very low alpha), `Abyss` (CHAOS — deep indigo flicker with cyan sparks). `Snow`, and the `FALL` behavior it needs, are deferred to v1.2.0.
+- **`prefers-reduced-motion` support**, on by default, zero developer effort. When the query matches, the instance renders a degraded config — count clamped to `8..40`, speed `×0.35`, turbulence `×0.6` — with palette, spark, and behavior preserved so the atmosphere stays recognizable. Opt out with `reducedMotion: false`. Follows the lite-confetti ecosystem precedent.
+  - Tracked **live** via a `matchMedia` `change` listener, torn down in `destroy()`. Flipping the OS setting mid-session degrades or restores without a reload; a construction-time snapshot would have left the user stuck until reload.
+  - The degrade is re-applied after `setTheme()` **and** `updateConfig()`. A user's accessibility preference outranks a developer's `count` knob; `reducedMotion: false` is the escape hatch.
+- **`instance.baseConfig`** — the config as requested, before any degrade. `instance.config` continues to report what is actually rendering.
+- **`instance.reducedMotion`** — live boolean, true while the degrade is active.
+- **`degradeForReducedMotion(cfg)`** — the pure transform, exported for tests and reuse.
+
+### Fixed
+- **`THEMES` is now null-prototype**, matching `BEHAVIORS`. As a plain object literal it inherited from `Object.prototype`, so `THEMES['constructor']` and `THEMES['toString']` were truthy — enough to slip past the `if (!themeBase)` guard in `createAmbientFX` and reach `mergeThemeConfig` with a function. Worse, once `registerTheme` existed, `registerTheme('__proto__', cfg)` would have hit the inherited `__proto__` setter and reassigned the registry's prototype instead of storing a theme. Latent in v1.0.0; a live hazard the moment `THEMES` became writable by callers. `Object.keys`, spread, and `JSON.stringify` are unaffected; only `THEMES.hasOwnProperty(...)` changes (use `Object.hasOwn`).
+- **`validateConfig` now guards the fields the tick loops read raw** — `wind.x`/`wind.y`, `decay`, `speed`, `size`, `turbulence`, and `spark` were never checked. A config missing any of them passed validation, then produced `undefined` in the hot loop → `NaN` positions → every particle silently vanished, with no throw and no warning. Harmless while `THEMES` was a closed set of complete presets; a real hole the moment `registerTheme` started accepting third-party configs. Non-finite and negative values are rejected too.
+
+### Changed
+- `setTheme()` and `updateConfig()` now re-derive the render config from a single `baseCfg` source of truth instead of mutating `cfg` in place. Behavior is identical when reduced-motion is inactive.
+- Unknown-theme errors now list the registered theme names, matching `resolveBehavior`'s error shape.
+- `ThemeName` in `.d.ts` widened to `BuiltInTheme | (string & {})` for runtime-registered themes; `AmbientOptions` documents `reducedMotion`.
+- Test suite: 70 → 106.
+
+### Notes
+- All v1.0.0 APIs and runtime behavior are preserved. The `validateConfig` tightening is the one semantic change: configs that used to be silently accepted and then render nothing now throw. Every built-in preset still validates.
+- Still **one file, zero dependencies**.
+
 ## [1.0.0] — 2026-07-11
 
 Initial public release. Extracted, cleaned up, and hardened from a private

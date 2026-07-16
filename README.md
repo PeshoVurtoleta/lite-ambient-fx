@@ -106,18 +106,21 @@ Full types in [`AmbientFX.d.ts`](./AmbientFX.d.ts).
 
 ---
 
-## The six shipped presets
+## The nine shipped presets
 
-| Preset  | Behavior | Vibe                                                         |
-| ------- | -------- | ------------------------------------------------------------ |
-| `Fire`  | EMBER    | Orange-yellow embers rising with mild leftward wind          |
-| `Night` | EMBER    | Cooler gold sparks with rightward drift; fewer particles     |
-| `Ice`   | MIST     | Large breathing blue-white fog blobs drifting horizontally   |
-| `Frost` | MIST     | Pale off-white lavender fog, slower drift                    |
-| `Toxic` | FLOAT    | Neon green particles rising with sine-wave horizontal sway   |
-| `Void`  | CHAOS    | Fast omnidirectional purple particles with 8Hz flicker       |
+| Preset   | Behavior | Vibe                                                        |
+| -------- | -------- | ----------------------------------------------------------- |
+| `Fire`   | EMBER    | Orange-yellow embers rising with mild leftward wind          |
+| `Night`  | EMBER    | Cooler gold sparks with rightward drift; fewer particles     |
+| `Ice`    | MIST     | Large breathing blue-white fog blobs drifting horizontally   |
+| `Frost`  | MIST     | Pale off-white lavender fog, slower drift                    |
+| `Toxic`  | FLOAT    | Neon green particles rising with sine-wave horizontal sway   |
+| `Void`   | CHAOS    | Fast omnidirectional purple particles with 8Hz flicker       |
+| `Dust`   | FLOAT    | Earthy tan motes on a slow rightward draft *(v1.1)*          |
+| `Aurora` | MIST     | Wide cyan-green-violet curtains, very low alpha *(v1.1)*     |
+| `Abyss`  | CHAOS    | Deep indigo flicker with cyan sparks *(v1.1)*                |
 
-Every preset is a full `AmbientConfig`; you can inspect them at `THEMES[name]` and copy any field into `overrides`.
+Every preset is a full `AmbientConfig`; you can inspect them at `THEMES[name]` and copy any field into `overrides`. Add your own with [`registerTheme`](#adding-a-custom-theme).
 
 ---
 
@@ -149,6 +152,7 @@ const fx = createAmbientFX(canvas, {
     theme: "Fire",                                // preset name (default: "Fire")
     overrides: { count: 400, alpha: 0.9 },        // partial config, merged over theme
     autoStart: true,                              // start the RAF loop (default: true)
+    reducedMotion: true,                          // respect prefers-reduced-motion (default: true)
 });
 ```
 
@@ -160,7 +164,9 @@ Returns an `AmbientInstance`.
 interface AmbientInstance {
     setTheme(name): void;               // swap to another preset
     updateConfig(overrides): void;      // change any knob live
-    readonly config: AmbientConfig;     // defensive-copy snapshot
+    readonly config: AmbientConfig;     // what is actually rendering (post-degrade)
+    readonly baseConfig: AmbientConfig; // what you asked for (pre-degrade)
+    readonly reducedMotion: boolean;    // is the degrade currently active
     readonly theme: ThemeName;          // current theme name
     readonly count: number;             // live particle count
     readonly running: boolean;          // RAF loop state
@@ -172,10 +178,12 @@ interface AmbientInstance {
 
 ### Named exports
 
-- `THEMES` — `Record<ThemeName, AmbientConfig>`; the six shipped presets.
-- `THEME_META` — `Array<{ id, name, icon, behavior }>` for UI builders.
+- `THEMES` — the theme registry, keyed by name. Nine built-in entries at module load. Null-prototype.
+- `THEME_META` — `Array<{ id, name, icon, behavior }>` for UI builders. `registerTheme` keeps it in sync.
+- `registerTheme(name, config, meta?)` — install a custom theme or replace a built-in.
 - `BEHAVIORS` — the behavior registry, keyed by name. Four built-in entries at module load.
 - `registerBehavior(name, def)` — install a custom behavior or replace a built-in.
+- `degradeForReducedMotion(cfg)` — the pure reduced-motion transform, exported for reuse.
 - `VERSION` — the package version string.
 - `mergeThemeConfig(base, overrides)` — pure config merge; shallow-merges the `wind` vector.
 - `validateConfig(cfg)` — throws on the first structural violation, returns the input on success.
@@ -183,6 +191,64 @@ interface AmbientInstance {
 - `sinLut(index)` — sign-safe LUT access.
 - `deltaScale(dtMs)` — `dtMs / 16`.
 - `clearAmbientSpriteCache(colors?)` — evict sprites by color, or the whole cache.
+
+---
+
+## Reduced motion
+
+A fullscreen animated background is precisely what [WCAG 2.3.3 / `prefers-reduced-motion`](https://www.w3.org/WAI/WCAG21/Understanding/animation-from-interactions.html) is aimed at. So this is **on by default and costs you nothing**:
+
+```js
+createAmbientFX(canvas, { theme: "Fire" });   // already respects the preference
+```
+
+When `prefers-reduced-motion: reduce` matches, the instance renders a degraded config — particle count clamped to `8..40`, speed at `0.35×`, turbulence at `0.6×`. The palette, spark, and behavior are untouched, so the atmosphere still *reads* as Fire or Aurora; it just stops moving much.
+
+Three details worth knowing:
+
+1. **It's tracked live.** Flip the OS setting mid-session and the instance degrades or restores without a reload. The listener is torn down in `destroy()`.
+2. **The preference outranks your knobs.** While reduced, `setTheme()` and `updateConfig({ count: 500 })` are still degraded — `baseConfig` remembers what you asked for, `config` reports what's actually rendering. This is deliberate: a user's accessibility setting should not be overridable by a `count` slider.
+3. **Opt out explicitly** with `reducedMotion: false` if you need full control (e.g. you're already gating the whole canvas yourself).
+
+For a fully static single frame, pause immediately after mounting:
+
+```js
+const fx = createAmbientFX(canvas, { theme: "Frost" });
+if (fx.reducedMotion) fx.pause();   // one composed frame, then nothing moves
+```
+
+---
+
+## Adding a custom theme
+
+`THEMES` is a registry, not a constant. Register a complete `AmbientConfig` and it becomes immediately available to `createAmbientFX({ theme })` and `setTheme()` — and appears in `THEME_META`, so an existing theme picker shows it with no code change.
+
+```js
+import { registerTheme, createAmbientFX } from "@zakkster/lite-ambient-fx";
+
+registerTheme("Rust", {
+    behavior: "FLOAT",
+    colors: ["#b7410e", "#8b4513", "#cd853f"],
+    spark: "#ffd7a0",
+    count: 90,
+    wind: { x: 0.2, y: -0.05 },
+    decay: 0.001,
+    speed: 0.5,
+    size: 7,
+    alpha: 0.55,
+    turbulence: 0.35,
+}, { name: "Rust Belt", icon: "wind" });   // meta is optional
+
+createAmbientFX(canvas, { theme: "Rust" });
+```
+
+The config must be **complete** — `registerTheme` runs it through `validateConfig`, which rejects a missing `wind`, `size`, `speed`, `decay`, or `turbulence` rather than letting them reach the tick loop as `undefined` and silently NaN out every particle position.
+
+Overriding a built-in keeps its curated `THEME_META` name and icon unless you pass new ones:
+
+```js
+registerTheme("Fire", { ...THEMES.Fire, count: 80 });   // still "Inferno" in the picker
+```
 
 ---
 

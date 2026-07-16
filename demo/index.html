@@ -35,6 +35,10 @@
             --phosphor-soft: oklch(0.88 0.22 155 / 0.16);
             --grid: rgba(70, 255, 156, 0.06);
             --grid: oklch(0.88 0.22 155 / 0.06);
+            --warn: #ffb340;
+            --warn: oklch(0.82 0.16 75);
+            --warn-soft: rgba(255, 179, 64, 0.16);
+            --warn-soft: oklch(0.82 0.16 75 / 0.16);
         }
 
         body {
@@ -302,6 +306,83 @@
             background: var(--phosphor-soft);
             letter-spacing: 0.05em;
         }
+
+        /* ── v1.1 scenes: a11y readout + registry actions ─────────── */
+
+        .pill {
+            display: inline-block;
+            padding: 0.1rem 0.4rem;
+            border: 1px solid var(--border);
+            border-radius: 0.2rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.6rem;
+            letter-spacing: 0.05em;
+            color: var(--dim);
+        }
+
+        .pill:is(.on) {
+            color: var(--warn);
+            border-color: var(--warn);
+            background: var(--warn-soft);
+        }
+
+        .readout {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 0.15rem 0.5rem;
+            margin-top: 0.5rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.65rem;
+            color: var(--dim);
+        }
+
+        .readout > :nth-child(even) {
+            color: var(--phosphor);
+            text-align: right;
+        }
+
+        .act-row {
+            display: flex;
+            gap: 0.4rem;
+            margin-top: 0.6rem;
+            flex-wrap: wrap;
+        }
+
+        .act-btn {
+            flex: 1 1 auto;
+            padding: 0.35rem 0.5rem;
+            border: 1px solid var(--border);
+            border-radius: 0.25rem;
+            background: transparent;
+            color: var(--dim);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.65rem;
+            letter-spacing: 0.03em;
+            cursor: pointer;
+            transition: color 0.15s, border-color 0.15s, background 0.15s;
+        }
+
+        @media (hover: hover) {
+            .act-btn:not(:disabled):hover {
+                color: var(--phosphor);
+                border-color: var(--phosphor);
+            }
+        }
+
+        .act-btn:is(.on) {
+            color: var(--warn);
+            border-color: var(--warn);
+            background: var(--warn-soft);
+        }
+
+        .act-btn:disabled {
+            opacity: 0.35;
+            cursor: not-allowed;
+        }
+
+        .theme-btn:is(.custom) {
+            border-style: dashed;
+        }
     </style>
 </head>
 <body>
@@ -311,12 +392,13 @@
     <div class="top">
         <div>
             <h1>@zakkster/lite-ambient-fx</h1>
-            <div class="sub">v1.0.0 &middot; zero-dep atmosphere presets</div>
+            <div class="sub">v1.1.0 &middot; nine presets &middot; theme registry &middot; reduced-motion</div>
         </div>
         <div class="hud">
             <div>mode: <span class="v" id="hudMode">--</span></div>
             <div>count: <span class="v" id="hudCount">--</span></div>
             <div>fps: <span class="v" id="hudFps">--</span></div>
+            <div>a11y: <span class="v" id="hudA11y">--</span></div>
         </div>
     </div>
 
@@ -329,8 +411,39 @@
     <div class="p-section">
         <div class="p-title">Preset</div>
         <div class="p-desc">
-            Six themed presets across four behaviors. Live-tweak with the sliders below;
-            switch behavior via a preset. <span class="badge" id="badgeBehavior">--</span>
+            Nine themed presets across four behaviors &mdash; Dust, Aurora and Abyss are new in v1.1.
+            Live-tweak with the sliders below; switch behavior via a preset.
+            <span class="badge" id="badgeBehavior">--</span>
+        </div>
+    </div>
+
+    <div class="p-section">
+        <div class="p-title">Reduced motion</div>
+        <div class="p-desc">
+            <code>prefers-reduced-motion</code> is respected by default, with no code from you.
+            Toggle it in your OS settings &mdash; the canvas re-derives live, no reload.
+            <span class="pill" id="pillReduced">inactive</span>
+        </div>
+        <div class="readout">
+            <span>baseConfig.count</span><span id="roBase">--</span>
+            <span>config.count</span><span id="roRender">--</span>
+            <span>config.speed</span><span id="roSpeed">--</span>
+        </div>
+        <div class="act-row">
+            <button class="act-btn" id="btnDegrade" type="button">Preview degrade</button>
+            <button class="act-btn" id="btnFreeze" type="button">Freeze frame</button>
+        </div>
+    </div>
+
+    <div class="p-section">
+        <div class="p-title">Theme registry</div>
+        <div class="p-desc">
+            <code>THEMES</code> is a registry, not a constant. Register a preset and it lands in
+            <code>THEME_META</code> &mdash; the picker above is rebuilt straight from it, with no
+            code change. That is the whole point.
+        </div>
+        <div class="act-row">
+            <button class="act-btn" id="btnRegister" type="button">registerTheme("Rust")</button>
         </div>
     </div>
 
@@ -389,7 +502,14 @@
 </script>
 
 <script type="module">
-  import { createAmbientFX, THEMES, THEME_META, VERSION } from "@zakkster/lite-ambient-fx";
+  import {
+    createAmbientFX,
+    registerTheme,
+    degradeForReducedMotion,
+    THEMES,
+    THEME_META,
+    VERSION,
+  } from "@zakkster/lite-ambient-fx";
 
   // ── Cached DOM lookups (all at init) ───────────────────────
   const $canvas = document.getElementById("fxCanvas");
@@ -400,6 +520,15 @@
   const $hudMode = document.getElementById("hudMode");
   const $hudCount = document.getElementById("hudCount");
   const $hudFps = document.getElementById("hudFps");
+  const $hudA11y = document.getElementById("hudA11y");
+
+  const $pillReduced = document.getElementById("pillReduced");
+  const $roBase = document.getElementById("roBase");
+  const $roRender = document.getElementById("roRender");
+  const $roSpeed = document.getElementById("roSpeed");
+  const $btnDegrade = document.getElementById("btnDegrade");
+  const $btnFreeze = document.getElementById("btnFreeze");
+  const $btnRegister = document.getElementById("btnRegister");
 
   const $rCount = document.getElementById("rCount");
   const $rSize = document.getElementById("rSize");
@@ -431,18 +560,34 @@
     { el: $rWindY, valEl: $vWindY, key: "windY", fmt: (v) => v.toString() },
   ];
 
+  // Element -> row, resolved once. The input handler runs on every slider tick;
+  // SLIDER_TABLE.find() would allocate a closure on each one.
+  const SLIDER_BY_EL = new Map();
+  for (let i = 0; i < SLIDER_TABLE.length; i++) {
+    SLIDER_BY_EL.set(SLIDER_TABLE[i].el, SLIDER_TABLE[i]);
+  }
+
   // ── FX instance ────────────────────────────────────────────
   let currentTheme = "Fire";
   const fx = createAmbientFX($canvas, { theme: currentTheme });
 
   // ── Theme buttons ──────────────────────────────────────────
-  for (let i = 0; i < THEME_META.length; i++) {
-    const m = THEME_META[i];
-    const btn = document.createElement("button");
-    btn.className = "theme-btn" + (m.id === currentTheme ? " active" : "");
-    btn.textContent = m.name;
-    btn.dataset.theme = m.id;
-    $themes.appendChild(btn);
+  // Rendered from THEME_META, never from a hardcoded list. registerTheme() keeps
+  // THEME_META in sync, so a re-render is all a new preset needs.
+  const BUILT_IN_COUNT = THEME_META.length;
+
+  function renderThemeButtons() {
+    $themes.textContent = "";
+    for (let i = 0; i < THEME_META.length; i++) {
+      const m = THEME_META[i];
+      const btn = document.createElement("button");
+      btn.className = "theme-btn"
+        + (m.id === currentTheme ? " active" : "")
+        + (i >= BUILT_IN_COUNT ? " custom" : "");
+      btn.textContent = m.name;
+      btn.dataset.theme = m.id;
+      $themes.appendChild(btn);
+    }
   }
 
   $themes.addEventListener("click", (ev) => {
@@ -500,13 +645,23 @@
   $panel.addEventListener("input", (ev) => {
     const el = ev.target;
     if (el.tagName !== "INPUT") return;
-    const row = SLIDER_TABLE.find((r) => r.el === el);
+    const row = SLIDER_BY_EL.get(el);
     if (row === undefined) return;
+
+    // A manual edit invalidates the degrade preview -- the snapshot we would
+    // restore to is now stale. Drop it rather than silently reverting the edit.
+    if (previewing) {
+      previewing = false;
+      previewSnapshot = null;
+      $btnDegrade.classList.remove("on");
+    }
+
     const v = parseFloat(el.value);
     row.valEl.textContent = row.fmt(v);
     if (row.key === "windX") fx.updateConfig({ wind: { x: v } });
     else if (row.key === "windY") fx.updateConfig({ wind: { y: v } });
     else fx.updateConfig({ [row.key]: v });
+    syncReduced();
   });
 
   function syncSliders() {
@@ -529,6 +684,90 @@
     $hudMode.textContent = cfg.behavior;
   }
 
+  // ── Scene: reduced motion ──────────────────────────────────
+  // The library already tracks the media query and re-derives its config live.
+  // The demo listens too, purely to keep this readout honest.
+  const reduceQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+  let previewing = false;
+  let previewSnapshot = null;
+
+  function syncReduced() {
+    const active = fx.reducedMotion;
+    const base = fx.baseConfig;
+    const cfg = fx.config;
+
+    $pillReduced.textContent = active ? "ACTIVE" : "inactive";
+    $pillReduced.classList.toggle("on", active);
+    $hudA11y.textContent = active ? "reduced" : "full";
+
+    $roBase.textContent = (base.count | 0).toString();
+    $roRender.textContent = (cfg.count | 0).toString();
+    $roSpeed.textContent = cfg.speed.toFixed(2);
+
+    // While the real preference is on, the library owns the degrade -- there is
+    // nothing left for the preview button to simulate.
+    $btnDegrade.disabled = active;
+    if (active && previewing) {
+      previewing = false;
+      previewSnapshot = null;
+      $btnDegrade.classList.remove("on");
+    }
+    $btnDegrade.textContent = active
+      ? "handled by the library"
+      : previewing ? "Restore full motion" : "Preview degrade";
+  }
+
+  reduceQuery.addEventListener("change", () => {
+    syncSliders();
+    syncBadges();
+    syncReduced();
+  });
+
+  $btnDegrade.addEventListener("click", () => {
+    if (fx.reducedMotion) return;
+    previewing = !previewing;
+    if (previewing) {
+      previewSnapshot = fx.baseConfig;
+      fx.updateConfig(degradeForReducedMotion(previewSnapshot));
+    } else {
+      fx.updateConfig(previewSnapshot);
+      previewSnapshot = null;
+    }
+    $btnDegrade.classList.toggle("on", previewing);
+    syncSliders();
+    syncReduced();
+  });
+
+  // The "static single frame" recipe: mount, then pause.
+  $btnFreeze.addEventListener("click", () => {
+    if (fx.running) fx.pause();
+    else fx.resume();
+    $btnFreeze.classList.toggle("on", !fx.running);
+    $btnFreeze.textContent = fx.running ? "Freeze frame" : "Resume";
+  });
+
+  // ── Scene: theme registry ──────────────────────────────────
+  const RUST = {
+    behavior: "FLOAT",
+    colors: ["#b7410e", "#8b4513", "#cd853f"],
+    spark: "#ffd7a0",
+    count: 90,
+    wind: { x: 0.2, y: -0.05 },
+    decay: 0.001,
+    speed: 0.5,
+    size: 7,
+    alpha: 0.55,
+    turbulence: 0.35,
+  };
+
+  $btnRegister.addEventListener("click", () => {
+    registerTheme("Rust", RUST, { name: "Rust Belt", icon: "wind" });
+    $btnRegister.disabled = true;
+    $btnRegister.textContent = "registered \u2713 THEME_META synced";
+    renderThemeButtons();   // the only line a real picker would need
+    switchTheme("Rust");
+  });
+
   // ── Panel toggle ───────────────────────────────────────────
   let panelOpen = true;
   $toggle.addEventListener("click", () => {
@@ -550,6 +789,7 @@
       const fps = ((hudFrames * 1000) / dt) | 0;
       $hudFps.textContent = fps.toString();
       $hudCount.textContent = fx.count.toString();
+      $roRender.textContent = (fx.config.count | 0).toString();
       hudFrames = 0;
       hudLastMs = now;
     }
@@ -557,8 +797,12 @@
   }
 
   // ── Boot ───────────────────────────────────────────────────
+  // Every initial UI value is read back out of the instance -- nothing about the
+  // starting state is hardcoded in the markup.
+  renderThemeButtons();
   syncSliders();
   syncBadges();
+  syncReduced();
   requestAnimationFrame(tickHud);
 </script>
 </body>

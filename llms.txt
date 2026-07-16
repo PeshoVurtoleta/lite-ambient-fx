@@ -95,10 +95,12 @@ function createAmbientFX(canvas: HTMLCanvasElement, options?: AmbientOptions): A
 // Registry
 const BEHAVIORS: Record<string, BehaviorDefinition>;
 function registerBehavior(name: string, def: BehaviorDefinition): void;
+function registerTheme(name: string, config: AmbientConfig, meta?: { name?: string; icon?: string }): AmbientConfig;
+function degradeForReducedMotion(cfg: AmbientConfig): AmbientConfig;
 
 // Constants
 const VERSION: string;
-const THEMES: Record<ThemeName, AmbientConfig>;
+const THEMES: Record<ThemeName, AmbientConfig>;  // null-prototype registry, 9 built-ins
 const THEME_META: Array<{ id: ThemeName; name: string; icon: string; behavior: BuiltInBehavior }>;
 
 // Pure helpers
@@ -208,3 +210,25 @@ No runtime imports from anywhere. Single-file ESM. `sideEffects: false`.
 ## License
 
 MIT (c) Zahary Shinikchiev
+
+## Theme registry (v1.1.0)
+THEMES is a null-prototype registry, not a frozen constant. `registerTheme(name, config, meta?)`
+installs a custom preset (or overrides a built-in); it is instantly usable via
+`createAmbientFX({ theme })` / `setTheme()` and is mirrored into THEME_META so existing
+theme pickers keep working. `config` must be a COMPLETE AmbientConfig -- validateConfig
+rejects a missing wind/size/speed/decay/turbulence rather than letting them NaN the tick loop.
+
+Nine built-in presets: Fire, Night, Ice, Frost, Toxic, Void (v1.0) + Dust, Aurora, Abyss (v1.1).
+Snow, and the FALL behavior it needs, are planned for v1.2.0.
+
+## Reduced motion (v1.1.0)
+`prefers-reduced-motion: reduce` is respected by default, zero config. When it matches, the
+instance renders a degraded config: count clamped to 8..40, speed x0.35, turbulence x0.6;
+palette, spark and behavior preserved. Tracked live via a matchMedia change listener (torn
+down in destroy()), so flipping the OS setting degrades or restores without a reload.
+
+While active the degrade is re-applied after setTheme() and updateConfig() -- the user's
+accessibility preference outranks the developer's count knob. `instance.baseConfig` reports
+what was requested, `instance.config` reports what is rendering, `instance.reducedMotion` is
+the live flag. Opt out with `createAmbientFX(canvas, { reducedMotion: false })`.
+For a fully static single frame: `if (fx.reducedMotion) fx.pause();` right after mounting.
