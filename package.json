@@ -1,65 +1,70 @@
 {
-    "name": "@zakkster/lite-ambient-fx",
-    "version": "1.1.0",
-    "description": "Zero-dependency fullscreen ambient particle atmospheres. Nine themed presets across four behaviors. Runtime theme & behavior registries, prefers-reduced-motion auto-degrade, sprite-cached, DPR-aware, resize-preserving, visibility-paused. One file.",
-    "type": "module",
-    "main": "./AmbientFX.js",
-    "module": "./AmbientFX.js",
-    "types": "./AmbientFX.d.ts",
-    "exports": {
-        ".": {
-            "types": "./AmbientFX.d.ts",
-            "node": "./AmbientFX.js",
-            "import": "./AmbientFX.js",
-            "default": "./AmbientFX.js"
-        }
-    },
-    "files": [
-        "AmbientFX.js",
-        "AmbientFX.d.ts",
-        "CHANGELOG.md",
-        "LICENSE.txt",
-        "README.md",
-        "llms.txt"
-    ],
-    "sideEffects": false,
-    "scripts": {
-        "test": "node --test 'test/*.mjs'",
-        "demo": "npx serve ."
-    },
-    "keywords": [
-        "particles",
-        "ambient",
-        "atmosphere",
-        "canvas",
-        "fx",
-        "zero-dependency",
-        "twitch-extension",
-        "background",
-        "presets",
-        "single-file",
-        "zakkster",
-        "themes",
-        "registry",
-        "accessibility",
-        "prefers-reduced-motion",
-        "a11y"
-    ],
-    "author": "Zahary Shinikchiev <shinikchiev@yahoo.com>",
-    "license": "MIT",
-    "repository": {
-        "type": "git",
-        "url": "git+https://github.com/PeshoVurtoleta/lite-ambient-fx.git"
-    },
-    "bugs": {
-        "url": "https://github.com/PeshoVurtoleta/lite-ambient-fx/issues"
-    },
-    "homepage": "https://github.com/PeshoVurtoleta/lite-ambient-fx#readme",
-    "funding": {
-        "type": "github",
-        "url": "https://github.com/sponsors/PeshoVurtoleta"
-    },
-    "engines": {
-        "node": ">=18"
+  "name": "@zakkster/lite-ambient-fx",
+  "version": "1.2.0",
+  "description": "Zero-dependency fullscreen ambient particle atmospheres. Eleven themed presets across five behaviors (EMBER, MIST, FLOAT, CHAOS, FALL). Parallax depth bands, pointer repel/attract, runtime theme & behavior registries, prefers-reduced-motion auto-degrade, sprite-cached, DPR-aware. One file.",
+  "type": "module",
+  "main": "./AmbientFX.js",
+  "module": "./AmbientFX.js",
+  "types": "./AmbientFX.d.ts",
+  "exports": {
+    ".": {
+      "types": "./AmbientFX.d.ts",
+      "node": "./AmbientFX.js",
+      "import": "./AmbientFX.js",
+      "default": "./AmbientFX.js"
     }
+  },
+  "files": [
+    "AmbientFX.js",
+    "AmbientFX.d.ts",
+    "CHANGELOG.md",
+    "LICENSE.txt",
+    "README.md",
+    "llms.txt"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "test": "node --test 'test/*.mjs'",
+    "demo": "npx serve ."
+  },
+  "keywords": [
+    "particles",
+    "ambient",
+    "atmosphere",
+    "canvas",
+    "fx",
+    "zero-dependency",
+    "twitch-extension",
+    "background",
+    "presets",
+    "single-file",
+    "zakkster",
+    "themes",
+    "registry",
+    "accessibility",
+    "prefers-reduced-motion",
+    "a11y",
+    "snow",
+    "rain",
+    "parallax",
+    "pointer",
+    "depth"
+  ],
+  "author": "Zahary Shinikchiev <shinikchiev@yahoo.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PeshoVurtoleta/lite-ambient-fx.git"
+  },
+  "bugs": {
+    "url": "https://github.com/PeshoVurtoleta/lite-ambient-fx/issues"
+  },
+  "homepage": "https://github.com/PeshoVurtoleta/lite-ambient-fx#readme",
+  "funding": {
+    "type": "github",
+    "url": "https://github.com/sponsors/PeshoVurtoleta"
+  },
+  "engines": {
+    "node": ">=18"
+  }
 }

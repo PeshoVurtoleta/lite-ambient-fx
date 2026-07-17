@@ -259,11 +259,17 @@ describe('particle shape monomorphism', () => {
                 'id', 'color', 'spriteCanvas', 'z', 'life', 'x', 'y', 'size',
                 'vx', 'vy', 'decay', 'maxAlpha',
                 'anchorX', 'anchorY', 'pulseOffset',
+                'terminal', 'driftPhase', 'driftSpeed', 'driftAmp',
             ];
-            for (const keys of snapshots) {
-                assert.deepEqual(keys, expected, 'particle keys stable at spawn time');
+            try {
+                for (const keys of snapshots) {
+                    assert.deepEqual(keys, expected, 'particle keys stable at spawn time');
+                }
+            } finally {
+                // Must destroy even when the assertion fails, or the instance's
+                // queued RAF outlives the deleted behavior and poisons the next test.
+                fx.destroy();
             }
-            fx.destroy();
         } finally {
             delete BEHAVIORS[probeName];
         }

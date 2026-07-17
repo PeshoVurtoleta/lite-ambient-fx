@@ -1,10 +1,11 @@
 /**
  * @zakkster/lite-ambient-fx
  *
- * Full-screen ambient particle atmospheres in one file. Nine themed presets
- * (Fire, Night, Ice, Frost, Toxic, Void, Dust, Aurora, Abyss) across four
- * particle behaviors (EMBER, MIST, FLOAT, CHAOS), plus registry hooks for
- * custom themes (`registerTheme`) and behaviors (`registerBehavior`).
+ * Full-screen ambient particle atmospheres in one file. Eleven themed presets
+ * (Fire, Night, Ice, Frost, Toxic, Void, Dust, Aurora, Abyss, Snow, Rain) across
+ * five particle behaviors (EMBER, MIST, FLOAT, CHAOS, FALL), plus registry hooks
+ * for custom themes (`registerTheme`) and behaviors (`registerBehavior`).
+ * Parallax depth bands and zero-alloc pointer reactivity (repel / attract).
  * Sprite-cached radial gradients, zero-alloc render loop, monomorphic
  * particle shape, DPR-aware rasterization, delta-time scaled,
  * resize-preserving, visibility-paused, and `prefers-reduced-motion`
@@ -13,7 +14,7 @@
  * (c) 2026 Zahary Shinikchiev. MIT.
  */
 
-export const VERSION = '1.1.0';
+export const VERSION = '1.2.0';
 
 // ============================================================
 //  THEME PRESETS
@@ -139,6 +140,38 @@ export const THEMES = Object.assign(Object.create(null), {
         alpha: 0.85,
         turbulence: 0.8,
     },
+
+    // ---- v1.2.0 presets (FALL + parallax depth bands) ----
+    // These are the ambient-backdrop cousins of @zakkster/lite-snow and
+    // @zakkster/lite-rain -- no ground, no accumulation, no splash. See the
+    // "Ecosystem positioning" section of the README before reaching for one.
+    Snow: {
+        behavior: 'FALL',
+        colors: ['#ffffff', '#e8f4ff', '#cfe6ff'],
+        spark: '#ffffff',
+        count: 220,
+        wind: { x: 0.35, y: 0 },
+        decay: 0.0006,
+        speed: 1.1,
+        size: 5,
+        alpha: 0.9,
+        turbulence: 0.9,
+        depthBands: 3,
+    },
+    Rain: {
+        behavior: 'FALL',
+        colors: ['#a8c8e8', '#7fa8d0', '#cfe4ff'],
+        spark: '#ffffff',
+        count: 300,
+        wind: { x: 0.9, y: 0 },
+        decay: 0.002,
+        speed: 6,
+        size: 3,
+        alpha: 0.55,
+        turbulence: 0.06,
+        depthBands: 3,
+        stretch: 2.2,
+    },
 });
 
 /**
@@ -156,6 +189,8 @@ export const THEME_META = [
     { id: 'Dust',   name: 'Dust Veil',   icon: 'wind',  behavior: 'FLOAT' },
     { id: 'Aurora', name: 'Aurora',      icon: 'wave',  behavior: 'MIST'  },
     { id: 'Abyss',  name: 'Abyss',       icon: 'hole',  behavior: 'CHAOS' },
+    { id: 'Snow',   name: 'Snowfall',    icon: 'snow',  behavior: 'FALL'  },
+    { id: 'Rain',   name: 'Downpour',    icon: 'rain',  behavior: 'FALL'  },
 ];
 
 // ============================================================
@@ -191,6 +226,41 @@ const MIST_LIFE_WRAP_MS = 72_000;
 // How far past the top edge an EMBER/FLOAT particle can go before we
 // consider it dead and respawn from the bottom.
 const RESPAWN_MARGIN_Y = 50;
+
+// ---- v1.2.0: FALL ----
+// Per-frame-at-60 units, like every other behavior here. Note these are NOT the
+// px/second constants from @zakkster/lite-snow or @zakkster/lite-rain; those
+// engines integrate against a seconds-based dt. Do not copy numbers across.
+const FALL_GRAVITY = 0.12;            // velocity gained per 60fps frame
+const FALL_DRIFT_SPEED_MIN = 1.5;     // sway phase advance, degrees per frame
+const FALL_DRIFT_SPEED_VAR = 2.5;
+const FALL_SPAWN_DRIFT = 120;         // widen the spawn band into the wind
+const FALL_CULL_X = 120;              // horizontal cull margin
+const FALL_SIZE_JITTER = 0.4;
+
+// ---- v1.2.0: parallax depth bands ----
+// Discrete z layers instead of a uniform ramp. Same trichotomy lite-snow and
+// lite-rain bucket into (near / mid / far); here it only affects spawn-time
+// attribute correlation -- no extra draw pass.
+const DEPTH_BAND_Z = [0.3, 0.6, 0.9];
+const DEPTH_BAND_JITTER = 0.08;
+const DEPTH_Z_MIN = 0.2;
+
+// ---- v1.2.0: pointer falloff ----
+// Cosine ease, 1 at the pointer and 0 at the radius, smooth at both ends.
+// Power-of-two length so the lookup is a mask, not a modulo.
+const FALLOFF_STEPS = 64;
+const FALLOFF_MASK = FALLOFF_STEPS - 1;
+const FALLOFF = new Float32Array(FALLOFF_STEPS);
+for (let i = 0; i < FALLOFF_STEPS; i++) {
+    FALLOFF[i] = 0.5 * (1 + Math.cos(Math.PI * (i / FALLOFF_MASK)));
+}
+
+const POINTER_OFF = 0;
+const POINTER_REPEL = 1;
+const POINTER_ATTRACT = -1;
+const POINTER_DEFAULT_RADIUS = 140;
+const POINTER_DEFAULT_STRENGTH = 8;
 
 // Alpha-envelope constants, pre-computed reciprocals so hot loops multiply
 // instead of divide. EMBER fade-in is at 0..0.2 (life * 5 = alpha frac);
@@ -328,11 +398,40 @@ export function validateConfig(cfg) {
             throw new RangeError('AmbientFX: ' + key + ' must be a finite non-negative number');
         }
     }
+    // Optional as of v1.2.0 -- absent means "off", so every pre-1.2 preset and
+    // every already-registered custom theme keeps validating unchanged.
+    if (cfg.depthBands !== undefined && cfg.depthBands !== 0 && cfg.depthBands !== 2 && cfg.depthBands !== 3) {
+        throw new RangeError('AmbientFX: depthBands must be 0, 2, or 3');
+    }
+    if (cfg.stretch !== undefined
+        && (typeof cfg.stretch !== 'number' || !Number.isFinite(cfg.stretch) || cfg.stretch < 0)) {
+        throw new RangeError('AmbientFX: stretch must be a finite non-negative number');
+    }
     return cfg;
 }
 
 /** Fields the behavior tick loops read raw. All must be finite and >= 0. */
 const NUMERIC_FIELDS = ['decay', 'speed', 'size', 'turbulence'];
+
+/**
+ * Sample a depth value for a spawning particle (v1.2.0).
+ *
+ * `bands` of 2 or 3 quantizes z into discrete parallax layers; anything else
+ * (including the `undefined` every pre-1.2 preset carries) falls back to the
+ * original uniform ramp, so existing themes are pixel-identical.
+ *
+ * z is already the correlation hub: every behavior multiplies size, alpha and
+ * per-frame movement by it. Banding it is therefore the whole parallax feature --
+ * near particles come out big, fast and opaque; far ones small, slow and faint,
+ * with no second draw pass and no new per-frame work.
+ */
+export function sampleDepth(bands) {
+    if (bands !== 2 && bands !== 3) return Math.random() * 0.8 + DEPTH_Z_MIN;
+    // Two bands take the extremes (0.3 / 0.9) for maximum separation.
+    const i = bands === 2 ? (Math.random() < 0.5 ? 0 : 2) : (Math.random() * 3) | 0;
+    const z = DEPTH_BAND_Z[i] + (Math.random() - 0.5) * DEPTH_BAND_JITTER;
+    return z < DEPTH_Z_MIN ? DEPTH_Z_MIN : z > 1 ? 1 : z;
+}
 
 /** Look up a theme by name. Mirrors resolveBehavior's error shape. */
 function resolveTheme(name) {
@@ -345,7 +444,7 @@ function resolveTheme(name) {
 
 /** Default THEME_META icon per built-in behavior. Keeps the existing vocabulary. */
 const DEFAULT_ICONS = Object.assign(Object.create(null), {
-    EMBER: 'sparks', MIST: 'fog', FLOAT: 'wind', CHAOS: 'orb',
+    EMBER: 'sparks', MIST: 'fog', FLOAT: 'wind', CHAOS: 'orb', FALL: 'snow',
 });
 
 /**
@@ -409,6 +508,29 @@ const REDUCED_SPEED_MIN = 0.05;
 const REDUCED_TURBULENCE_SCALE = 0.6;
 
 /**
+ * Normalize a pointer spec (v1.2.0). Pure; returns a fresh object.
+ * Pointer reactivity is an *interaction* concern, not a look concern, so it
+ * lives on the instance rather than inside a theme preset -- you would not bake
+ * "repel" into what Fire looks like.
+ */
+export function resolvePointer(spec) {
+    const src = spec || {};
+    const mode = src.mode === undefined ? 'off' : src.mode;
+    if (mode !== 'off' && mode !== 'repel' && mode !== 'attract') {
+        throw new RangeError('AmbientFX: pointer.mode must be "off", "repel" or "attract"');
+    }
+    const radius = src.radius === undefined ? POINTER_DEFAULT_RADIUS : src.radius;
+    if (typeof radius !== 'number' || !Number.isFinite(radius) || radius <= 0) {
+        throw new RangeError('AmbientFX: pointer.radius must be a finite number > 0');
+    }
+    const strength = src.strength === undefined ? POINTER_DEFAULT_STRENGTH : src.strength;
+    if (typeof strength !== 'number' || !Number.isFinite(strength) || strength < 0) {
+        throw new RangeError('AmbientFX: pointer.strength must be a finite number >= 0');
+    }
+    return { mode, radius, strength };
+}
+
+/**
  * Delta-time scale factor. Frame velocities are tuned at 60fps; multiply
  * per-frame constants by this to remain framerate-independent.
  */
@@ -464,6 +586,10 @@ function makeParticle(id) {
         // MIST-specific fields -- always present, zeroed for other behaviors.
         anchorX: 0, anchorY: 0,
         pulseOffset: 0,
+        // FALL-specific fields (v1.2.0) -- same rule. `terminal` is this
+        // particle's own terminal velocity, already scaled by its depth.
+        terminal: 0,
+        driftPhase: 0, driftSpeed: 0, driftAmp: 0,
     };
 }
 
@@ -525,7 +651,7 @@ BEHAVIORS.EMBER = {
         const cfg = frame.cfg;
         const W = frame.W;
         const H = frame.H;
-        p.z = Math.random() * 0.8 + 0.2;
+        p.z = sampleDepth(cfg.depthBands);
         p.color = Math.random() > 0.9 ? cfg.spark : cfg.colors[(Math.random() * cfg.colors.length) | 0];
         p.spriteCanvas = frame.getSprite(p.color, SPRITE_LOGICAL_CORE);
         p.life = 0;
@@ -541,6 +667,10 @@ BEHAVIORS.EMBER = {
         p.anchorX = 0;
         p.anchorY = 0;
         p.pulseOffset = 0;
+        p.terminal = 0;
+        p.driftPhase = 0;
+        p.driftSpeed = 0;
+        p.driftAmp = 0;
     },
 
     tick(particles, ctx, frame) {
@@ -586,7 +716,7 @@ BEHAVIORS.MIST = {
         const cfg = frame.cfg;
         const W = frame.W;
         const H = frame.H;
-        p.z = Math.random() * 0.8 + 0.2;
+        p.z = sampleDepth(cfg.depthBands);
         p.color = Math.random() > 0.9 ? cfg.spark : cfg.colors[(Math.random() * cfg.colors.length) | 0];
         p.spriteCanvas = frame.getSprite(p.color, SPRITE_LOGICAL_MIST);
         p.life = 0;
@@ -600,6 +730,10 @@ BEHAVIORS.MIST = {
         p.vx = 0;
         p.vy = 0;
         p.decay = 0;
+        p.terminal = 0;
+        p.driftPhase = 0;
+        p.driftSpeed = 0;
+        p.driftAmp = 0;
     },
 
     tick(particles, ctx, frame) {
@@ -654,7 +788,7 @@ BEHAVIORS.FLOAT = {
         const cfg = frame.cfg;
         const W = frame.W;
         const H = frame.H;
-        p.z = Math.random() * 0.8 + 0.2;
+        p.z = sampleDepth(cfg.depthBands);
         p.color = Math.random() > 0.9 ? cfg.spark : cfg.colors[(Math.random() * cfg.colors.length) | 0];
         p.spriteCanvas = frame.getSprite(p.color, SPRITE_LOGICAL_CORE);
         p.life = 0;
@@ -668,6 +802,10 @@ BEHAVIORS.FLOAT = {
         p.anchorX = 0;
         p.anchorY = 0;
         p.pulseOffset = 0;
+        p.terminal = 0;
+        p.driftPhase = 0;
+        p.driftSpeed = 0;
+        p.driftAmp = 0;
     },
 
     tick(particles, ctx, frame) {
@@ -710,7 +848,7 @@ BEHAVIORS.CHAOS = {
         const cfg = frame.cfg;
         const W = frame.W;
         const H = frame.H;
-        p.z = Math.random() * 0.8 + 0.2;
+        p.z = sampleDepth(cfg.depthBands);
         p.color = Math.random() > 0.9 ? cfg.spark : cfg.colors[(Math.random() * cfg.colors.length) | 0];
         p.spriteCanvas = frame.getSprite(p.color, SPRITE_LOGICAL_CORE);
         p.life = 0;
@@ -724,6 +862,10 @@ BEHAVIORS.CHAOS = {
         p.anchorX = 0;
         p.anchorY = 0;
         p.pulseOffset = 0;
+        p.terminal = 0;
+        p.driftPhase = 0;
+        p.driftSpeed = 0;
+        p.driftAmp = 0;
     },
 
     tick(particles, ctx, frame) {
@@ -772,6 +914,106 @@ BEHAVIORS.CHAOS = {
  * @property {boolean} [autoStart=true] Start the RAF loop immediately.
  */
 
+
+// ---- Built-in: FALL (v1.2.0) --------------------------------
+// The gap in the original four: EMBER rises, FLOAT rises with sway, MIST drifts
+// laterally, CHAOS goes everywhere. Nothing fell.
+//
+// Physics ported *conceptually* from @zakkster/lite-snow and @zakkster/lite-rain
+// -- per-particle terminal velocity scaled by depth, and sway as a phase/speed/
+// amplitude triple. Not ported literally: those engines are SoA, seconds-based,
+// path-batched, and depend on @zakkster/lite-color. This one is AoS, per-frame,
+// sprite-cached, and keeps the zero-dependency badge intact.
+BEHAVIORS.FALL = {
+    spriteLogical: SPRITE_LOGICAL_CORE,
+
+    spawn(p, frame) {
+        const cfg = frame.cfg;
+        const W = frame.W;
+        const H = frame.H;
+        p.z = sampleDepth(cfg.depthBands);
+        p.color = Math.random() > 0.9 ? cfg.spark : cfg.colors[(Math.random() * cfg.colors.length) | 0];
+        p.spriteCanvas = frame.getSprite(p.color, SPRITE_LOGICAL_CORE);
+        p.life = 0;
+
+        // Wind shears the column sideways. Widen the spawn band upwind so the
+        // leading edge doesn't starve -- otherwise a strong wind.x leaves a
+        // visibly empty wedge. Same correction lite-snow applies.
+        const drift = Math.abs(cfg.wind.x) * FALL_SPAWN_DRIFT;
+        p.x = Math.random() * (W + drift * 2) - drift;
+        p.y = frame.isInit
+            ? Math.random() * H
+            : -RESPAWN_MARGIN_Y - Math.random() * RESPAWN_MARGIN_Y;
+
+        p.size = (cfg.size + (Math.random() - 0.5) * cfg.size * FALL_SIZE_JITTER) * p.z;
+        p.vx = 0;
+        p.vy = 0;                            // starts at rest, accelerates to terminal
+        p.terminal = cfg.speed * p.z;        // depth-scaled: near flakes fall faster
+        p.decay = cfg.decay;
+        p.maxAlpha = cfg.alpha * p.z;
+
+        // Sway: phase advances per frame, so it needs no wall-clock reference and
+        // cannot drift out of integer range the way `timestamp * k` eventually would.
+        p.driftPhase = (Math.random() * 360) | 0;
+        p.driftSpeed = FALL_DRIFT_SPEED_MIN + Math.random() * FALL_DRIFT_SPEED_VAR;
+        p.driftAmp = cfg.turbulence * p.z;
+
+        p.anchorX = 0;
+        p.anchorY = 0;
+        p.pulseOffset = 0;
+    },
+
+    tick(particles, ctx, frame) {
+        const cfg = frame.cfg;
+        const wind = cfg.wind;
+        const ds = frame.ds;
+        const W = frame.W;
+        const H = frame.H;
+        const respawn = frame.respawn;
+        // `stretch` elongates the sprite along the fall vector -- a round blob
+        // becomes a streak. That is the whole difference between Snow and Rain.
+        const stretch = cfg.stretch === undefined ? 0 : cfg.stretch;
+        const cullBottom = H + RESPAWN_MARGIN_Y;
+        const cullRight = W + FALL_CULL_X;
+
+        for (let i = 0; i < particles.length; i++) {
+            const p = particles[i];
+
+            p.vy += FALL_GRAVITY * ds;
+            if (p.vy > p.terminal) p.vy = p.terminal;
+
+            p.driftPhase += p.driftSpeed * ds;
+            const sway = sinLut(p.driftPhase) * p.driftAmp;
+
+            p.x += (wind.x + sway) * p.z * ds;
+            p.y += (p.vy + wind.y * p.z) * ds;
+            p.life += p.decay * ds;
+
+            if (p.y > cullBottom || p.x < -FALL_CULL_X || p.x > cullRight || p.life >= 1) {
+                respawn(p, false);
+                continue;
+            }
+
+            const alpha = p.life < 0.1
+                ? p.life * FLOAT_FADE_INV * p.maxAlpha
+                : p.maxAlpha;
+
+            if (alpha > ALPHA_EPSILON) {
+                ctx.globalAlpha = alpha > 1 ? 1 : alpha;
+                const w = p.size;
+                const h = stretch === 0 ? w : w + p.vy * stretch;
+                ctx.drawImage(
+                    p.spriteCanvas,
+                    (p.x - w * 0.5) | 0,
+                    (p.y - h * 0.5) | 0,
+                    w | 0,
+                    h | 0,
+                );
+            }
+        }
+    },
+};
+
 /**
  * Create a fullscreen ambient particle atmosphere on the given canvas.
  *
@@ -800,6 +1042,20 @@ export function createAmbientFX(canvas, options) {
         ? window.matchMedia('(prefers-reduced-motion: reduce)')
         : null;
     let isReduced = !!(reduceMedia && reduceMedia.matches);
+
+    // --- pointer reactivity (v1.2.0) ----------------------------------------
+    let pointerSpec = resolvePointer(opts.pointer);
+    let pointerMode = pointerSpec.mode === 'repel' ? POINTER_REPEL
+        : pointerSpec.mode === 'attract' ? POINTER_ATTRACT
+        : POINTER_OFF;
+    let pointerX = 0;
+    let pointerY = 0;
+    let pointerActive = false;
+    let pointerBound = false;
+    // Canvas origin, cached at resize. Reading getBoundingClientRect() inside the
+    // pointermove handler would force a layout on every mouse move.
+    let rectLeft = 0;
+    let rectTop = 0;
 
     let baseCfg = validateConfig(mergeThemeConfig(themeBase, opts.overrides));
     let cfg = isReduced ? degradeForReducedMotion(baseCfg) : baseCfg;
@@ -855,6 +1111,12 @@ export function createAmbientFX(canvas, options) {
         const prevH = H;
         W = canvas.clientWidth || canvas.width || 1;
         H = canvas.clientHeight || canvas.height || 1;
+        if (typeof canvas.getBoundingClientRect === 'function') {
+            const rect = canvas.getBoundingClientRect();
+            rectLeft = rect.left;
+            rectTop = rect.top;
+        }
+
         const newDpr = window.devicePixelRatio || 1;
         canvas.width = (W * newDpr) | 0;
         canvas.height = (H * newDpr) | 0;
@@ -921,6 +1183,81 @@ export function createAmbientFX(canvas, options) {
         }
     }
 
+    /**
+     * Displace particles near the pointer, once per frame, BEFORE the behavior
+     * ticks. Doing it as a separate pass rather than inside each tick loop means
+     * every behavior gets pointer reactivity for free -- including third-party
+     * ones registered via registerBehavior, which never learn this exists.
+     *
+     * Zero allocation. Costs one branch per frame when the pointer is off.
+     */
+    function applyPointer(ds) {
+        if (pointerMode === POINTER_OFF || !pointerActive) return;
+        // WCAG 2.3.3 is literally "Animation from Interactions". A user who asked
+        // for reduced motion did not ask for particles to chase their cursor.
+        if (isReduced) return;
+
+        const px = pointerX;
+        const py = pointerY;
+        const radius = pointerSpec.radius;
+        const r2 = radius * radius;
+        const invRadius = 1 / radius;
+        const k = pointerSpec.strength * pointerMode * ds;
+
+        for (let i = 0; i < particles.length; i++) {
+            const p = particles[i];
+            const dx = p.x - px;
+            const dy = p.y - py;
+            const d2 = dx * dx + dy * dy;
+            if (d2 >= r2 || d2 < 1) continue;   // outside the radius, or dead centre
+            const d = Math.sqrt(d2);
+            // Depth-correlated: near particles react hard, far ones barely move.
+            // This is what makes the parallax bands read as actual depth.
+            const f = (k * FALLOFF[(d * invRadius * FALLOFF_MASK) & FALLOFF_MASK] * p.z) / d;
+            p.x += dx * f;
+            p.y += dy * f;
+        }
+    }
+
+    function onPointerMove(e) {
+        pointerX = e.clientX - rectLeft;
+        pointerY = e.clientY - rectTop;
+        pointerActive = true;
+    }
+
+    function onPointerEnd(e) {
+        // A mouse keeps hovering after mouseup; a finger does not.
+        if (e.pointerType === 'mouse') return;
+        pointerActive = false;
+    }
+
+    function onPointerOut() {
+        pointerActive = false;
+    }
+
+    // Listeners go on window, not the canvas: an ambient backdrop is usually
+    // behind the UI (or pointer-events: none), so canvas-local events never fire.
+    function bindPointer() {
+        if (pointerBound || typeof window === 'undefined' || typeof window.addEventListener !== 'function') return;
+        window.addEventListener('pointermove', onPointerMove, { passive: true });
+        window.addEventListener('pointerdown', onPointerMove, { passive: true });
+        window.addEventListener('pointerup', onPointerEnd, { passive: true });
+        window.addEventListener('pointercancel', onPointerOut, { passive: true });
+        document.addEventListener('pointerleave', onPointerOut, { passive: true });
+        pointerBound = true;
+    }
+
+    function unbindPointer() {
+        if (!pointerBound) return;
+        window.removeEventListener('pointermove', onPointerMove);
+        window.removeEventListener('pointerdown', onPointerMove);
+        window.removeEventListener('pointerup', onPointerEnd);
+        window.removeEventListener('pointercancel', onPointerOut);
+        document.removeEventListener('pointerleave', onPointerOut);
+        pointerBound = false;
+        pointerActive = false;
+    }
+
     function loop(timestamp) {
         if (destroyed || !running) return;
         raf = requestAnimationFrame(loop);
@@ -940,6 +1277,8 @@ export function createAmbientFX(canvas, options) {
         frame.ds = dt / DT_REF_MS;
         frame.timestamp = timestamp;
         frame.isInit = false;
+
+        applyPointer(frame.ds);
 
         ctx.clearRect(0, 0, W, H);
         behavior.tick(particles, ctx, frame);
@@ -987,6 +1326,7 @@ export function createAmbientFX(canvas, options) {
     resize();
     primeSprites();
     initParticles();
+    if (pointerMode !== POINTER_OFF) bindPointer();
     if (opts.autoStart !== false) {
         running = true;
         raf = requestAnimationFrame(loop);
@@ -1024,6 +1364,29 @@ export function createAmbientFX(canvas, options) {
         /** True when prefers-reduced-motion is matching and not opted out. */
         get reducedMotion() { return isReduced; },
 
+        /** Current pointer spec: { mode, radius, strength }. Defensive copy. */
+        get pointer() {
+            return { mode: pointerSpec.mode, radius: pointerSpec.radius, strength: pointerSpec.strength };
+        },
+
+        /**
+         * Change pointer reactivity live. Partial: omitted keys keep their value.
+         * Setting mode to 'off' detaches the listeners entirely.
+         */
+        setPointer(next) {
+            if (destroyed) return;
+            pointerSpec = resolvePointer({
+                mode: next && next.mode !== undefined ? next.mode : pointerSpec.mode,
+                radius: next && next.radius !== undefined ? next.radius : pointerSpec.radius,
+                strength: next && next.strength !== undefined ? next.strength : pointerSpec.strength,
+            });
+            pointerMode = pointerSpec.mode === 'repel' ? POINTER_REPEL
+                : pointerSpec.mode === 'attract' ? POINTER_ATTRACT
+                : POINTER_OFF;
+            if (pointerMode === POINTER_OFF) unbindPointer();
+            else bindPointer();
+        },
+
         get theme() { return currentThemeName; },
 
         get count() { return particles.length; },
@@ -1049,6 +1412,7 @@ export function createAmbientFX(canvas, options) {
             running = false;
             if (raf !== null) { cancelAnimationFrame(raf); raf = null; }
             document.removeEventListener('visibilitychange', onVisibility);
+            unbindPointer();
             if (reduceMedia) {
                 if (typeof reduceMedia.removeEventListener === 'function') {
                     reduceMedia.removeEventListener('change', onReduceChange);

@@ -79,8 +79,26 @@ function makeCanvas(width = 800, height = 600) {
             if (!ctx) ctx = makeContext2D();
             return ctx;
         },
+        // The pointer pass caches this at resize rather than reading it per move.
+        getBoundingClientRect() {
+            return { left: 0, top: 0, width, height, right: width, bottom: height };
+        },
     };
     return c;
+}
+
+// Dispatch a synthetic pointer event to whatever the instance bound on window.
+function firePointer(type, clientX, clientY, pointerType = 'mouse') {
+    const arr = globalThis.window._listeners[type];
+    if (!arr) return;
+    for (const fn of arr.slice()) fn({ clientX, clientY, pointerType });
+}
+function windowListenerCount() {
+    let n = 0;
+    for (const k of Object.keys(globalThis.window._listeners)) {
+        n += globalThis.window._listeners[k].length;
+    }
+    return n;
 }
 
 before(() => {
@@ -101,7 +119,18 @@ before(() => {
             return {};
         },
     };
-    globalThis.window = { devicePixelRatio: 2, matchMedia: makeMatchMedia };
+    globalThis.window = {
+        devicePixelRatio: 2,
+        matchMedia: makeMatchMedia,
+        _listeners: {},
+        addEventListener(name, fn) { (this._listeners[name] ||= []).push(fn); },
+        removeEventListener(name, fn) {
+            const arr = this._listeners[name];
+            if (!arr) return;
+            const i = arr.indexOf(fn);
+            if (i >= 0) arr.splice(i, 1);
+        },
+    };
     globalThis.requestAnimationFrame = (fn) => {
         const id = rafNext++;
         rafCallbacks.push({ id, fn });
@@ -128,7 +157,7 @@ function pumpFrame(timestamp) {
     for (const { fn } of batch) fn(timestamp);
 }
 
-const { createAmbientFX, THEMES, clearAmbientSpriteCache } = await import('../AmbientFX.js');
+const { createAmbientFX, THEMES, BEHAVIORS, clearAmbientSpriteCache, sampleDepth } = await import('../AmbientFX.js');
 
 describe('createAmbientFX -- argument validation', () => {
     test('throws on missing canvas', () => {
@@ -423,5 +452,277 @@ describe('prefers-reduced-motion', () => {
         const fx = createAmbientFX(makeCanvas(), { autoStart: false, reducedMotion: false });
         assert.equal(totalReduceListeners(), before);
         fx.destroy();
+    });
+});
+
+// ============================================================
+//  v1.2.0 -- FALL behavior
+// ============================================================
+
+describe('FALL behavior', () => {
+    // Drive BEHAVIORS.FALL directly against the {spawn, tick} contract. This is
+    // the only way to observe particle state -- the pool is closed over.
+    function fallHarness(cfg, n) {
+        const particles = [];
+        const sprite = { __sprite: true };
+        const frame = {
+            cfg,
+            W: 800,
+            H: 600,
+            dt: 16,
+            ds: 1,
+            timestamp: 0,
+            isInit: false,
+            getSprite: () => sprite,
+            respawn: (p) => { p.__respawned = (p.__respawned | 0) + 1; BEHAVIORS.FALL.spawn(p, frame); },
+        };
+        for (let i = 0; i < n; i++) {
+            const p = {
+                id: i, color: '', spriteCanvas: null, z: 0, life: 0, x: 0, y: 0, size: 0,
+                vx: 0, vy: 0, decay: 0, maxAlpha: 0, anchorX: 0, anchorY: 0, pulseOffset: 0,
+                terminal: 0, driftPhase: 0, driftSpeed: 0, driftAmp: 0,
+            };
+            BEHAVIORS.FALL.spawn(p, frame);
+            particles.push(p);
+        }
+        const ctx = makeContext2D();
+        return { particles, frame, ctx };
+    }
+
+    test('particles fall -- the gap the other four behaviors left', () => {
+        const cfg = { ...THEMES.Snow, wind: { x: 0, y: 0 }, turbulence: 0 };
+        const h = fallHarness(cfg, 40);
+        // Park everyone mid-screen so nobody culls out during the window.
+        for (const p of h.particles) { p.y = 100; p.vy = 0; }
+        const y0 = h.particles.map((p) => p.y);
+        for (let f = 0; f < 30; f++) {
+            h.frame.timestamp = f * 16;
+            BEHAVIORS.FALL.tick(h.particles, h.ctx, h.frame);
+        }
+        for (let i = 0; i < h.particles.length; i++) {
+            const p = h.particles[i];
+            if (p.__respawned) continue;
+            assert.ok(p.y > y0[i], 'particle ' + i + ' moved down: ' + y0[i] + ' -> ' + p.y);
+        }
+    });
+
+    test('vy accelerates toward the particle terminal velocity and clamps there', () => {
+        const cfg = { ...THEMES.Snow, wind: { x: 0, y: 0 }, turbulence: 0, decay: 0 };
+        const h = fallHarness(cfg, 25);
+        for (const p of h.particles) { p.y = 0; p.vy = 0; }
+        for (let f = 0; f < 400; f++) {
+            for (const p of h.particles) p.y = 100;    // hold them on-screen
+            BEHAVIORS.FALL.tick(h.particles, h.ctx, h.frame);
+        }
+        for (const p of h.particles) {
+            assert.ok(p.vy <= p.terminal + 1e-6, 'vy clamped: ' + p.vy + ' <= ' + p.terminal);
+            assert.ok(p.vy > p.terminal * 0.99, 'vy reached terminal: ' + p.vy);
+            assert.ok(p.terminal > 0 && p.terminal <= cfg.speed + 1e-9);
+        }
+    });
+
+    test('terminal velocity is depth-correlated -- near flakes outrun far ones', () => {
+        const h = fallHarness({ ...THEMES.Snow }, 400);
+        let near = null;
+        let far = null;
+        for (const p of h.particles) {
+            if (near === null || p.z > near.z) near = p;
+            if (far === null || p.z < far.z) far = p;
+        }
+        assert.ok(near.z - far.z > 0.4, 'depth bands are separated');
+        assert.ok(near.terminal > far.terminal, 'near falls faster');
+        assert.ok(near.size > far.size, 'near is bigger');
+        assert.ok(near.maxAlpha > far.maxAlpha, 'near is more opaque');
+    });
+
+    test('turbulence sways particles horizontally; zero turbulence does not', () => {
+        const swayCfg = { ...THEMES.Snow, wind: { x: 0, y: 0 }, turbulence: 3 };
+        const stillCfg = { ...THEMES.Snow, wind: { x: 0, y: 0 }, turbulence: 0 };
+        for (const [cfg, shouldMove] of [[swayCfg, true], [stillCfg, false]]) {
+            const h = fallHarness(cfg, 30);
+            for (const p of h.particles) { p.y = 50; }
+            const x0 = h.particles.map((p) => p.x);
+            for (let f = 0; f < 20; f++) {
+                for (const p of h.particles) p.y = 50;
+                BEHAVIORS.FALL.tick(h.particles, h.ctx, h.frame);
+            }
+            const moved = h.particles.filter((p, i) => Math.abs(p.x - x0[i]) > 0.01).length;
+            if (shouldMove) assert.ok(moved > 20, 'sway displaced ' + moved + '/30');
+            else assert.equal(moved, 0, 'no sway at turbulence 0');
+        }
+    });
+
+    test('particles below the floor are recycled back to the top', () => {
+        const h = fallHarness({ ...THEMES.Snow }, 10);
+        for (const p of h.particles) { p.y = 5000; }
+        BEHAVIORS.FALL.tick(h.particles, h.ctx, h.frame);
+        for (const p of h.particles) {
+            assert.equal(p.__respawned, 1, 'respawned once');
+            assert.ok(p.y < 0, 'respawned above the top edge: ' + p.y);
+        }
+    });
+
+    test('stretch elongates the sprite along the fall vector (Rain), not Snow', () => {
+        function drawnHeights(cfg) {
+            const h = fallHarness(cfg, 12);
+            const heights = [];
+            for (const p of h.particles) { p.y = 300; p.vy = p.terminal; p.life = 0.5; }
+            const ctx = {
+                globalAlpha: 1,
+                drawImage(_s, _x, _y, w, hh) { heights.push([w, hh]); },
+            };
+            BEHAVIORS.FALL.tick(h.particles, ctx, h.frame);
+            return heights;
+        }
+        const snow = drawnHeights({ ...THEMES.Snow });
+        assert.ok(snow.length > 0);
+        for (const [w, hh] of snow) assert.equal(w, hh, 'snow draws square (round blob)');
+
+        const rain = drawnHeights({ ...THEMES.Rain });
+        assert.ok(rain.length > 0);
+        let stretched = 0;
+        for (const [w, hh] of rain) if (hh > w) stretched++;
+        assert.ok(stretched > 0, 'rain draws elongated streaks');
+    });
+
+    test('Snow and Rain both mount and render through FALL', () => {
+        for (const theme of ['Snow', 'Rain']) {
+            const canvas = makeCanvas(800, 600);
+            const fx = createAmbientFX(canvas, { theme, overrides: { count: 30 } });
+            pumpFrame(0);
+            pumpFrame(16);
+            pumpFrame(32);
+            const calls = canvas.getContext('2d').__state.calls;
+            assert.ok(calls.some((c) => c[0] === 'drawImage'), theme + ' drew sprites');
+            assert.equal(fx.config.behavior, 'FALL');
+            fx.destroy();
+        }
+    });
+
+    test('Rain carries a stretch, Snow does not', () => {
+        assert.ok(THEMES.Rain.stretch > 1, 'rain streaks');
+        assert.equal(THEMES.Snow.stretch, undefined, 'snow stays round');
+    });
+
+    test('FALL survives a zero-turbulence, zero-wind config without NaN', () => {
+        const canvas = makeCanvas(400, 300);
+        const fx = createAmbientFX(canvas, {
+            theme: 'Snow',
+            overrides: { count: 10, turbulence: 0, wind: { x: 0, y: 0 } },
+        });
+        for (let t = 0; t <= 320; t += 16) pumpFrame(t);
+        assert.equal(fx.count, 10);
+        fx.destroy();
+    });
+});
+
+// ============================================================
+//  v1.2.0 -- pointer reactivity
+// ============================================================
+
+describe('pointer reactivity', () => {
+    test('defaults to off and binds no listeners', () => {
+        const before = windowListenerCount();
+        const fx = createAmbientFX(makeCanvas(), { theme: 'Fire', autoStart: false });
+        assert.equal(fx.pointer.mode, 'off');
+        assert.equal(windowListenerCount(), before, 'no pointer listeners when off');
+        fx.destroy();
+    });
+
+    test('repel binds listeners and destroy() releases them', () => {
+        const before = windowListenerCount();
+        const fx = createAmbientFX(makeCanvas(), {
+            theme: 'Fire',
+            autoStart: false,
+            pointer: { mode: 'repel' },
+        });
+        assert.ok(windowListenerCount() > before, 'listeners attached');
+        fx.destroy();
+        assert.equal(windowListenerCount(), before, 'listeners released');
+    });
+
+    test('setPointer("off") unbinds live; setPointer("attract") re-binds', () => {
+        const before = windowListenerCount();
+        const fx = createAmbientFX(makeCanvas(), {
+            theme: 'Fire',
+            autoStart: false,
+            pointer: { mode: 'repel', radius: 100, strength: 5 },
+        });
+        fx.setPointer({ mode: 'off' });
+        assert.equal(windowListenerCount(), before, 'unbound');
+        assert.equal(fx.pointer.mode, 'off');
+
+        fx.setPointer({ mode: 'attract' });
+        assert.ok(windowListenerCount() > before, 'rebound');
+        assert.equal(fx.pointer.mode, 'attract');
+        assert.equal(fx.pointer.radius, 100, 'partial update keeps the radius');
+        assert.equal(fx.pointer.strength, 5, 'partial update keeps the strength');
+        fx.destroy();
+    });
+
+    test('rejects a bad spec at construction and at setPointer', () => {
+        assert.throws(
+            () => createAmbientFX(makeCanvas(), { pointer: { mode: 'shove' } }),
+            RangeError,
+        );
+        const fx = createAmbientFX(makeCanvas(), { autoStart: false, pointer: { mode: 'repel' } });
+        assert.throws(() => fx.setPointer({ radius: -5 }), RangeError);
+        assert.equal(fx.pointer.radius, 140, 'spec unchanged after a rejected update');
+        fx.destroy();
+    });
+
+    test('pointer spec getter is a defensive copy', () => {
+        const fx = createAmbientFX(makeCanvas(), { autoStart: false, pointer: { mode: 'repel' } });
+        const a = fx.pointer;
+        a.radius = 9999;
+        assert.equal(fx.pointer.radius, 140, 'mutating the copy does not leak in');
+        fx.destroy();
+    });
+
+    test('a touch pointerup ends the interaction; a mouse pointerup does not', () => {
+        const fx = createAmbientFX(makeCanvas(), { theme: 'Fire', pointer: { mode: 'repel' } });
+        firePointer('pointermove', 100, 100, 'mouse');
+        firePointer('pointerup', 100, 100, 'mouse');
+        pumpFrame(0);
+        pumpFrame(16);   // still hovering -- no throw, still running
+        assert.ok(fx.running);
+
+        firePointer('pointermove', 100, 100, 'touch');
+        firePointer('pointerup', 100, 100, 'touch');
+        pumpFrame(32);
+        assert.ok(fx.running);
+        fx.destroy();
+    });
+
+    test('the pointer pass runs for every behavior, including custom ones', () => {
+        // The pass lives in the instance loop, not in any tick(), so a behavior
+        // registered by a third party gets pointer reactivity without knowing it.
+        for (const theme of ['Fire', 'Ice', 'Toxic', 'Void', 'Snow']) {
+            const canvas = makeCanvas(800, 600);
+            const fx = createAmbientFX(canvas, {
+                theme,
+                overrides: { count: 25 },
+                pointer: { mode: 'repel', radius: 200, strength: 30 },
+            });
+            firePointer('pointermove', 400, 300);
+            for (let t = 0; t <= 96; t += 16) pumpFrame(t);
+            assert.equal(fx.count, 25, theme + ' pool intact');
+            fx.destroy();
+        }
+    });
+
+    test('reduced motion disables pointer reactivity (WCAG 2.3.3)', () => {
+        mediaState.reduce = true;
+        const fx = createAmbientFX(makeCanvas(), {
+            theme: 'Fire',
+            pointer: { mode: 'repel', strength: 50 },
+        });
+        assert.equal(fx.reducedMotion, true);
+        firePointer('pointermove', 100, 100);
+        for (let t = 0; t <= 64; t += 16) pumpFrame(t);
+        // Still mounted and sane -- the pass short-circuits rather than moving anything.
+        assert.ok(fx.running);
+        fx.destroy();
+        mediaState.reduce = false;
     });
 });

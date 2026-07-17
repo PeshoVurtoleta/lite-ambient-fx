@@ -392,13 +392,14 @@
     <div class="top">
         <div>
             <h1>@zakkster/lite-ambient-fx</h1>
-            <div class="sub">v1.1.0 &middot; nine presets &middot; theme registry &middot; reduced-motion</div>
+            <div class="sub">v1.2.0 &middot; eleven presets &middot; FALL &middot; parallax &middot; pointer</div>
         </div>
         <div class="hud">
             <div>mode: <span class="v" id="hudMode">--</span></div>
             <div>count: <span class="v" id="hudCount">--</span></div>
             <div>fps: <span class="v" id="hudFps">--</span></div>
             <div>a11y: <span class="v" id="hudA11y">--</span></div>
+            <div>ptr: <span class="v" id="hudPtr">--</span></div>
         </div>
     </div>
 
@@ -411,9 +412,46 @@
     <div class="p-section">
         <div class="p-title">Preset</div>
         <div class="p-desc">
-            Nine themed presets across four behaviors &mdash; Dust, Aurora and Abyss are new in v1.1.
+            Eleven themed presets across five behaviors &mdash; Snow and Rain ride the new FALL
+            behavior. Nothing fell before v1.2.
             Live-tweak with the sliders below; switch behavior via a preset.
             <span class="badge" id="badgeBehavior">--</span>
+        </div>
+    </div>
+
+    <div class="p-section">
+        <div class="p-title">Parallax depth</div>
+        <div class="p-desc">
+            Every behavior already scales size, alpha and movement by a particle's <code>z</code>.
+            Quantizing <code>z</code> at spawn <em>is</em> the parallax &mdash; no extra draw pass,
+            no per-frame cost. Re-seeds the pool.
+        </div>
+        <div class="act-row">
+            <button class="act-btn on" id="bDepth0" type="button" data-bands="0">continuous</button>
+            <button class="act-btn" id="bDepth2" type="button" data-bands="2">2 bands</button>
+            <button class="act-btn" id="bDepth3" type="button" data-bands="3">3 bands</button>
+        </div>
+    </div>
+
+    <div class="p-section">
+        <div class="p-title">Pointer</div>
+        <div class="p-desc">
+            One pass over the pool before <code>behavior.tick</code> &mdash; so every behavior gets
+            this free, including custom ones. Force is depth-scaled: near particles shove hard,
+            far ones barely move. Off under reduced motion.
+        </div>
+        <div class="act-row">
+            <button class="act-btn on" id="bPtrOff" type="button" data-mode="off">off</button>
+            <button class="act-btn" id="bPtrRepel" type="button" data-mode="repel">repel</button>
+            <button class="act-btn" id="bPtrAttract" type="button" data-mode="attract">attract</button>
+        </div>
+        <div class="ctrl">
+            <div class="ctrl-head"><span>Radius</span><span class="ctrl-val" id="vPtrRadius">--</span></div>
+            <input type="range" id="rPtrRadius" min="40" max="400" step="10">
+        </div>
+        <div class="ctrl">
+            <div class="ctrl-head"><span>Strength</span><span class="ctrl-val" id="vPtrStrength">--</span></div>
+            <input type="range" id="rPtrStrength" min="0" max="40" step="1">
         </div>
     </div>
 
@@ -506,9 +544,7 @@
     createAmbientFX,
     registerTheme,
     degradeForReducedMotion,
-    THEMES,
     THEME_META,
-    VERSION,
   } from "@zakkster/lite-ambient-fx";
 
   // ── Cached DOM lookups (all at init) ───────────────────────
@@ -529,6 +565,22 @@
   const $btnDegrade = document.getElementById("btnDegrade");
   const $btnFreeze = document.getElementById("btnFreeze");
   const $btnRegister = document.getElementById("btnRegister");
+  const $hudPtr = document.getElementById("hudPtr");
+
+  const $depthBtns = [
+    document.getElementById("bDepth0"),
+    document.getElementById("bDepth2"),
+    document.getElementById("bDepth3"),
+  ];
+  const $ptrBtns = [
+    document.getElementById("bPtrOff"),
+    document.getElementById("bPtrRepel"),
+    document.getElementById("bPtrAttract"),
+  ];
+  const $rPtrRadius = document.getElementById("rPtrRadius");
+  const $rPtrStrength = document.getElementById("rPtrStrength");
+  const $vPtrRadius = document.getElementById("vPtrRadius");
+  const $vPtrStrength = document.getElementById("vPtrStrength");
 
   const $rCount = document.getElementById("rCount");
   const $rSize = document.getElementById("rSize");
@@ -566,6 +618,14 @@
   for (let i = 0; i < SLIDER_TABLE.length; i++) {
     SLIDER_BY_EL.set(SLIDER_TABLE[i].el, SLIDER_TABLE[i]);
   }
+
+  // Dataset values are parsed once, here -- never inside an event handler.
+  const DEPTH_VALUES = new Int32Array($depthBtns.length);
+  for (let i = 0; i < $depthBtns.length; i++) {
+    DEPTH_VALUES[i] = $depthBtns[i].dataset.bands | 0;
+  }
+  const PTR_MODES = [];
+  for (let i = 0; i < $ptrBtns.length; i++) PTR_MODES.push($ptrBtns[i].dataset.mode);
 
   // ── FX instance ────────────────────────────────────────────
   let currentTheme = "Fire";
@@ -608,6 +668,7 @@
     }
     syncSliders();
     syncBadges();
+    syncDepth();
   }
 
   // ── Slider ranges by behavior ──────────────────────────────
@@ -648,12 +709,18 @@
     const row = SLIDER_BY_EL.get(el);
     if (row === undefined) return;
 
-    // A manual edit invalidates the degrade preview -- the snapshot we would
-    // restore to is now stale. Drop it rather than silently reverting the edit.
+    // A manual edit exits the degrade preview. Crucially, restore the pre-degrade
+    // base FIRST: while previewing, updateConfig() has replaced the library's baseCfg
+    // with the degraded settings, so applying the edit now would bake the degrade in
+    // permanently and layer the edit on top of it. Restoring the snapshot returns the
+    // full-motion base, then the edit below lands on that. (previewSnapshot === fx.baseConfig
+    // captured at preview time, so it is the correct pre-degrade base.)
+    const wasPreviewing = previewing;
     if (previewing) {
       previewing = false;
-      previewSnapshot = null;
       $btnDegrade.classList.remove("on");
+      if (previewSnapshot) fx.updateConfig(previewSnapshot);
+      previewSnapshot = null;
     }
 
     const v = parseFloat(el.value);
@@ -661,6 +728,11 @@
     if (row.key === "windX") fx.updateConfig({ wind: { x: v } });
     else if (row.key === "windY") fx.updateConfig({ wind: { y: v } });
     else fx.updateConfig({ [row.key]: v });
+
+    // If we just exited preview, the other sliders still show the degraded positions
+    // that entering preview set them to. Re-sync them to the restored full-motion base
+    // (this reads fx.config, which now reflects the restore + this edit).
+    if (wasPreviewing) syncSliders();
     syncReduced();
   });
 
@@ -721,6 +793,7 @@
     syncSliders();
     syncBadges();
     syncReduced();
+    syncPointer();   // the pointer pass short-circuits under reduced motion
   });
 
   $btnDegrade.addEventListener("click", () => {
@@ -744,6 +817,51 @@
     else fx.resume();
     $btnFreeze.classList.toggle("on", !fx.running);
     $btnFreeze.textContent = fx.running ? "Freeze frame" : "Resume";
+  });
+
+  // ── Scene: parallax depth bands ────────────────────────────
+  function syncDepth() {
+    const bands = fx.config.depthBands === undefined ? 0 : fx.config.depthBands;
+    for (let i = 0; i < $depthBtns.length; i++) {
+      $depthBtns[i].classList.toggle("on", DEPTH_VALUES[i] === bands);
+    }
+  }
+
+  for (let i = 0; i < $depthBtns.length; i++) {
+    $depthBtns[i].addEventListener("click", () => {
+      fx.updateConfig({ depthBands: DEPTH_VALUES[i] });
+      syncDepth();
+    });
+  }
+
+  // ── Scene: pointer reactivity ──────────────────────────────
+  function syncPointer() {
+    const ptr = fx.pointer;
+    for (let i = 0; i < $ptrBtns.length; i++) {
+      $ptrBtns[i].classList.toggle("on", PTR_MODES[i] === ptr.mode);
+    }
+    $rPtrRadius.value = ptr.radius;
+    $rPtrStrength.value = ptr.strength;
+    $vPtrRadius.textContent = (ptr.radius | 0).toString();
+    $vPtrStrength.textContent = (ptr.strength | 0).toString();
+    $hudPtr.textContent = fx.reducedMotion && ptr.mode !== "off" ? "off (a11y)" : ptr.mode;
+  }
+
+  for (let i = 0; i < $ptrBtns.length; i++) {
+    $ptrBtns[i].addEventListener("click", () => {
+      fx.setPointer({ mode: PTR_MODES[i] });
+      syncPointer();
+    });
+  }
+
+  $rPtrRadius.addEventListener("input", () => {
+    fx.setPointer({ radius: parseFloat($rPtrRadius.value) });
+    syncPointer();
+  });
+
+  $rPtrStrength.addEventListener("input", () => {
+    fx.setPointer({ strength: parseFloat($rPtrStrength.value) });
+    syncPointer();
   });
 
   // ── Scene: theme registry ──────────────────────────────────
@@ -803,6 +921,8 @@
   syncSliders();
   syncBadges();
   syncReduced();
+  syncDepth();
+  syncPointer();
   requestAnimationFrame(tickHud);
 </script>
 </body>

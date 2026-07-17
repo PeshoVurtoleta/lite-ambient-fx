@@ -97,6 +97,8 @@ const BEHAVIORS: Record<string, BehaviorDefinition>;
 function registerBehavior(name: string, def: BehaviorDefinition): void;
 function registerTheme(name: string, config: AmbientConfig, meta?: { name?: string; icon?: string }): AmbientConfig;
 function degradeForReducedMotion(cfg: AmbientConfig): AmbientConfig;
+function sampleDepth(bands?: 0 | 2 | 3): number;
+function resolvePointer(spec?: PointerSpec): { mode, radius, strength };
 
 // Constants
 const VERSION: string;
@@ -232,3 +234,29 @@ accessibility preference outranks the developer's count knob. `instance.baseConf
 what was requested, `instance.config` reports what is rendering, `instance.reducedMotion` is
 the live flag. Opt out with `createAmbientFX(canvas, { reducedMotion: false })`.
 For a fully static single frame: `if (fx.reducedMotion) fx.pause();` right after mounting.
+
+## FALL behavior + parallax + pointer (v1.2.0)
+FALL is the fifth built-in behavior: downward drift with a per-particle terminal velocity
+(scaled by depth) and phase/speed/amplitude sway. Unlocks the Snow and Rain presets.
+`cfg.stretch` elongates the sprite along the fall vector -- that is the only difference
+between Snow (round) and Rain (streaks).
+
+`cfg.depthBands` (0 | 2 | 3, optional) quantizes z into discrete parallax layers at spawn.
+Every behavior already scales size/alpha/movement by z, so banding z IS the parallax --
+no extra draw pass, no per-frame cost. Absent = the original continuous ramp, so all
+pre-1.2 presets are pixel-identical.
+
+`createAmbientFX(canvas, { pointer: { mode: 'repel'|'attract'|'off', radius, strength } })`
+plus `instance.setPointer(partial)` and `instance.pointer`. Implemented as ONE pass over the
+pool in the instance loop, before behavior.tick -- so custom behaviors registered via
+registerBehavior get pointer reactivity for free. Cosine falloff LUT (64 entries, bitmask
+indexed), force scaled by particle depth. Listeners on window (a backdrop is usually
+pointer-events:none), canvas rect cached at resize. Disabled under prefers-reduced-motion.
+
+## Positioning vs @zakkster/lite-snow and @zakkster/lite-rain
+lite-ambient-fx FALL does NOT replace them. Those are weather SIMULATIONS: SoA Float32Array
+pools, seconds-based integration, ground accumulation/melt (snow), splash/bounce (rain),
+8-10k particles, path-batched rendering, and they depend on @zakkster/lite-color.
+lite-ambient-fx FALL is an ambient BACKDROP: AoS monomorphic particles, per-frame units,
+no ground, fixed recycled pool, sprite-cached drawImage, zero dependencies.
+Weather is the subject -> lite-snow / lite-rain. Weather is the background -> lite-ambient-fx.

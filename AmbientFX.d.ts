@@ -3,7 +3,7 @@
  * (c) 2026 Zahary Shinikchiev. MIT.
  */
 
-export type BuiltInBehavior = 'EMBER' | 'MIST' | 'FLOAT' | 'CHAOS';
+export type BuiltInBehavior = 'EMBER' | 'MIST' | 'FLOAT' | 'CHAOS' | 'FALL';
 
 /**
  * Any registered behavior name -- widen to `string` because users can
@@ -13,7 +13,28 @@ export type BehaviorName = BuiltInBehavior | (string & {});
 
 export type BuiltInTheme =
     | 'Fire' | 'Night' | 'Ice' | 'Frost' | 'Toxic' | 'Void'
-    | 'Dust' | 'Aurora' | 'Abyss';
+    | 'Dust' | 'Aurora' | 'Abyss'
+    | 'Snow' | 'Rain';
+
+/** Discrete parallax layers. 0 (or absent) keeps the original continuous z ramp. */
+export type DepthBands = 0 | 2 | 3;
+
+export type PointerMode = 'off' | 'repel' | 'attract';
+
+export interface PointerSpec {
+    /** Push particles away, pull them in, or do nothing. Default 'off'. */
+    mode?: PointerMode;
+    /** Radius of influence in CSS pixels. Default 140. */
+    radius?: number;
+    /** Peak displacement per 60fps frame at the pointer. Default 8. */
+    strength?: number;
+}
+
+export interface ResolvedPointer {
+    mode: PointerMode;
+    radius: number;
+    strength: number;
+}
 
 /** Any registered theme name -- widened because users add their own via `registerTheme`. */
 export type ThemeName = BuiltInTheme | (string & {});
@@ -44,8 +65,20 @@ export interface AmbientConfig {
     size: number;
     /** Alpha cap; multiplied by z for depth. Clamped to [0, 1]. */
     alpha: number;
-    /** Amplitude of the sin-LUT lateral turbulence. */
+    /** Amplitude of the sin-LUT lateral turbulence. For FALL, the sway amplitude. */
     turbulence: number;
+    /**
+     * Quantize depth into 2 or 3 discrete parallax layers at spawn (v1.2.0).
+     * Omit or set 0 for the original continuous ramp. Because every behavior
+     * already scales size, alpha and movement by z, banding it *is* the parallax:
+     * no extra draw pass, no extra per-frame work.
+     */
+    depthBands?: DepthBands;
+    /**
+     * FALL only (v1.2.0). Elongates the sprite along the fall vector, turning a
+     * round blob into a streak. 0 / absent = round (Snow); ~2.2 = rain.
+     */
+    stretch?: number;
 }
 
 export interface AmbientOptions {
@@ -69,6 +102,16 @@ export interface AmbientOptions {
      * `count` knob. Use `reducedMotion: false` if you need to override it.
      */
     reducedMotion?: boolean;
+    /**
+     * Pointer reactivity (v1.2.0). Applied as a single pass over the pool before
+     * the behavior ticks, so *every* behavior gets it -- including custom ones
+     * installed via registerBehavior, which never learn it exists.
+     *
+     * Force falls off on a precomputed cosine curve and is scaled by particle
+     * depth, so near particles react hard and far ones barely move.
+     * Automatically disabled under prefers-reduced-motion (WCAG 2.3.3).
+     */
+    pointer?: PointerSpec;
 }
 
 export interface AmbientInstance {
@@ -81,6 +124,10 @@ export interface AmbientInstance {
     /** True while `prefers-reduced-motion: reduce` matches and it is not opted out. */
     readonly reducedMotion: boolean;
     readonly theme: ThemeName;
+    /** Current pointer spec. Defensive copy. */
+    readonly pointer: ResolvedPointer;
+    /** Change pointer reactivity live. Partial -- omitted keys keep their value. */
+    setPointer(next: PointerSpec): void;
     readonly count: number;
     readonly running: boolean;
     pause(): void;
@@ -199,6 +246,16 @@ export function registerTheme(name: string, config: AmbientConfig, meta?: ThemeM
  * apply the same degrade to their own configs.
  */
 export function degradeForReducedMotion(cfg: AmbientConfig): AmbientConfig;
+
+/**
+ * Sample a depth value for a spawning particle. `bands` of 2 or 3 quantizes z
+ * into discrete parallax layers; anything else falls back to the original
+ * uniform ramp, so pre-1.2 presets are pixel-identical.
+ */
+export function sampleDepth(bands?: DepthBands): number;
+
+/** Normalize and validate a pointer spec, filling in defaults. Pure. */
+export function resolvePointer(spec?: PointerSpec | null): ResolvedPointer;
 
 /** Drop cached sprites by color, or the entire cache when `colors` is omitted. */
 export function clearAmbientSpriteCache(colors?: string[]): void;

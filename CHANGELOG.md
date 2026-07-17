@@ -5,6 +5,29 @@ All notable changes to `@zakkster/lite-ambient-fx` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] — 2026-07-14
+
+### Added
+- **`FALL` behavior** — the fifth built-in, and the gap the original four left: EMBER rises, FLOAT rises with sway, MIST drifts laterally, CHAOS goes everywhere, and nothing fell. Per-particle terminal velocity scaled by depth, plus phase/speed/amplitude sway advanced per frame (no wall-clock reference, so it cannot drift out of integer range). Widens the spawn band into the wind so a strong `wind.x` doesn't starve the upwind edge.
+- **`Snow` and `Rain` presets**, both on FALL with 3 depth bands.
+- **`cfg.stretch`** (FALL, optional) — elongates the sprite along the fall vector. A round blob becomes a streak; that is the entire difference between Snow and Rain.
+- **`cfg.depthBands`** (`0 | 2 | 3`, optional) — parallax depth bands. Every behavior already scales size, alpha, and per-frame movement by `z`, so quantizing `z` at spawn *is* the parallax: no extra draw pass, no per-frame cost. Absent means the original continuous ramp, so every pre-1.2 preset is pixel-identical.
+- **`sampleDepth(bands)`** — the pure depth sampler, exported.
+- **Pointer reactivity** — `createAmbientFX(canvas, { pointer: { mode: 'repel' | 'attract' | 'off', radius, strength } })`, plus `instance.setPointer(partial)` and `instance.pointer`. Force falls off on a precomputed 64-entry cosine LUT (bitmask-indexed, same trick as `sinLut`) and is scaled by particle depth, so near particles shove hard and far ones barely move — which is what makes the depth bands read as actual distance.
+  - Implemented as **one pass over the pool in the instance loop, before `behavior.tick`** — not inside any tick loop. Every behavior therefore gets pointer reactivity for free, *including third-party ones registered via `registerBehavior`*, which never learn the feature exists. Costs one branch per frame when off.
+  - Listeners bind to `window`, not the canvas: an ambient backdrop is typically behind the UI or under `pointer-events: none`, so canvas-local events would never fire. The canvas origin is cached at resize — calling `getBoundingClientRect()` inside a `pointermove` handler would force a layout on every mouse move.
+  - Disabled under `prefers-reduced-motion`. WCAG 2.3.3 is literally titled *Animation from Interactions*.
+- **`resolvePointer(spec)`** — the pure pointer-spec normalizer/validator, exported.
+
+### Changed
+- `makeParticle` gains four fields (`terminal`, `driftPhase`, `driftSpeed`, `driftAmp`) so the monomorphic shape still covers the union of all behaviors. Every existing spawn zeroes them, per the contract. The shape test caught this immediately, as designed.
+- `validateConfig` accepts `depthBands` and `stretch` as **optional** — absent means off — so every pre-1.2 preset and every already-registered custom theme keeps validating unchanged.
+- Test suite: 106 → 136. The FALL physics are tested against the `{spawn, tick}` contract directly (terminal-velocity clamp, depth correlation, sway on/off, edge recycle, streak geometry) rather than through the closed pool.
+
+### Notes
+- **`FALL` does not replace `@zakkster/lite-snow` or `@zakkster/lite-rain`.** Those are weather *simulations* — SoA `Float32Array` pools, seconds-based integration, ground accumulation and melt, splash and bounce, 8–10k particles, path-batched rendering — and they depend on `@zakkster/lite-color`. This is an ambient *backdrop*: AoS monomorphic particles, per-frame units, no ground, a fixed recycled pool, sprite-cached `drawImage`, zero dependencies. The physics ideas were ported; the code could not be. See "Ecosystem positioning" in the README.
+- Still **one file, zero dependencies**.
+
 ## [1.1.0] — 2026-07-14
 
 ### Added

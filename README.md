@@ -106,7 +106,28 @@ Full types in [`AmbientFX.d.ts`](./AmbientFX.d.ts).
 
 ---
 
-## The nine shipped presets
+## Ecosystem positioning
+
+`lite-ambient-fx` FALL is **not** a replacement for [`@zakkster/lite-snow`](https://github.com/PeshoVurtoleta/lite-snow) or [`@zakkster/lite-rain`](https://github.com/PeshoVurtoleta/lite-rain). They solve different problems and are built on opposite architectures:
+
+| | `lite-snow` / `lite-rain` | `lite-ambient-fx` (FALL) |
+| --- | --- | --- |
+| **Job** | Weather *simulation* | Ambient *backdrop* |
+| Ground | Accumulation + melt / splash + bounce | None — particles recycle at the edges |
+| Pool | Density emission into 8–10k slots | Fixed `count`, recycled |
+| Memory | SoA (parallel `Float32Array`s) | AoS, monomorphic particle objects |
+| Render | Path batching (`beginPath` → N arcs → one `fill`) | Sprite-cached gradients, `drawImage` |
+| Deps | `@zakkster/lite-color` | **Zero** |
+
+Reach for **`lite-snow` / `lite-rain`** when the weather *is* the thing — when you need drops that splash, flakes that settle and melt, and thousands of particles under a real seconds-based integrator.
+
+Reach for **`lite-ambient-fx`** when the weather is *behind* the thing — an atmosphere layer that sits under live UI at 60fps, next to Fire and Aurora, sharing one theme picker, one sprite cache, and one zero-dependency file.
+
+The `Snow` and `Rain` presets here are backdrops. They are the cheap cousin, and that is on purpose.
+
+---
+
+## The eleven shipped presets
 
 | Preset   | Behavior | Vibe                                                        |
 | -------- | -------- | ----------------------------------------------------------- |
@@ -119,6 +140,8 @@ Full types in [`AmbientFX.d.ts`](./AmbientFX.d.ts).
 | `Dust`   | FLOAT    | Earthy tan motes on a slow rightward draft *(v1.1)*          |
 | `Aurora` | MIST     | Wide cyan-green-violet curtains, very low alpha *(v1.1)*     |
 | `Abyss`  | CHAOS    | Deep indigo flicker with cyan sparks *(v1.1)*                |
+| `Snow`   | FALL     | Banded snowfall, per-flake terminal velocity + sway *(v1.2)* |
+| `Rain`   | FALL     | Fast stretched streaks on a hard sidewind *(v1.2)*           |
 
 Every preset is a full `AmbientConfig`; you can inspect them at `THEMES[name]` and copy any field into `overrides`. Add your own with [`registerTheme`](#adding-a-custom-theme).
 
@@ -153,6 +176,7 @@ const fx = createAmbientFX(canvas, {
     overrides: { count: 400, alpha: 0.9 },        // partial config, merged over theme
     autoStart: true,                              // start the RAF loop (default: true)
     reducedMotion: true,                          // respect prefers-reduced-motion (default: true)
+    pointer: { mode: "repel", radius: 140, strength: 8 },   // default: { mode: "off" }
 });
 ```
 
@@ -168,6 +192,8 @@ interface AmbientInstance {
     readonly baseConfig: AmbientConfig; // what you asked for (pre-degrade)
     readonly reducedMotion: boolean;    // is the degrade currently active
     readonly theme: ThemeName;          // current theme name
+    readonly pointer: ResolvedPointer;  // { mode, radius, strength }
+    setPointer(next): void;             // change pointer reactivity live
     readonly count: number;             // live particle count
     readonly running: boolean;          // RAF loop state
     pause(): void;                      // stop RAF (idempotent)
@@ -184,6 +210,8 @@ interface AmbientInstance {
 - `BEHAVIORS` — the behavior registry, keyed by name. Four built-in entries at module load.
 - `registerBehavior(name, def)` — install a custom behavior or replace a built-in.
 - `degradeForReducedMotion(cfg)` — the pure reduced-motion transform, exported for reuse.
+- `sampleDepth(bands)` — the parallax depth sampler. `2` or `3` bands, or the continuous ramp.
+- `resolvePointer(spec)` — normalize + validate a pointer spec, filling in defaults.
 - `VERSION` — the package version string.
 - `mergeThemeConfig(base, overrides)` — pure config merge; shallow-merges the `wind` vector.
 - `validateConfig(cfg)` — throws on the first structural violation, returns the input on success.
@@ -191,6 +219,46 @@ interface AmbientInstance {
 - `sinLut(index)` — sign-safe LUT access.
 - `deltaScale(dtMs)` — `dtMs / 16`.
 - `clearAmbientSpriteCache(colors?)` — evict sprites by color, or the whole cache.
+
+---
+
+## Parallax depth bands
+
+Every behavior already multiplies size, alpha, and per-frame movement by a particle's `z`. So `z` is the correlation hub — and quantizing it into discrete layers *is* the parallax. No second draw pass, no per-frame cost, nothing but a different number picked at spawn.
+
+```js
+createAmbientFX(canvas, { theme: "Fire", overrides: { depthBands: 3 } });
+```
+
+| `depthBands` | Effect |
+| --- | --- |
+| omitted / `0` | Continuous `z` ramp — the original v1.0 look. Every pre-1.2 preset. |
+| `2` | Two layers at `z ≈ 0.3` / `0.9`. Maximum separation, strongest depth read. |
+| `3` | Three layers at `z ≈ 0.3` / `0.6` / `0.9`. What `Snow` and `Rain` ship with. |
+
+Because it's spawn-time only, turning it on costs nothing at runtime — and turning it *off* is the default, so no existing preset changed.
+
+---
+
+## Pointer reactivity
+
+```js
+const fx = createAmbientFX(canvas, {
+    theme: "Snow",
+    pointer: { mode: "repel", radius: 160, strength: 12 },
+});
+
+fx.setPointer({ mode: "attract" });   // live, partial — radius/strength persist
+fx.setPointer({ mode: "off" });       // detaches the listeners entirely
+```
+
+The force falls off on a precomputed cosine curve (a 64-entry LUT, indexed with a bitmask — the same trick as `sinLut`) and is **scaled by particle depth**, so near particles shove hard and far ones barely register. That depth scaling is what makes the parallax bands read as actual distance rather than just size variation.
+
+Three things worth knowing about how it's built:
+
+1. **It is not in any tick loop.** It's a single pass over the pool in the instance loop, *before* the behavior ticks. That means every behavior gets pointer reactivity for free — including a custom one you register via `registerBehavior`, which never learns this feature exists. When the pointer is off, the cost is one branch per frame.
+2. **Listeners go on `window`, not the canvas.** An ambient backdrop usually sits behind the UI or under `pointer-events: none`, so canvas-local events would never fire. The canvas origin is cached at resize — reading `getBoundingClientRect()` inside a `pointermove` handler would force a layout on every mouse move.
+3. **It's off under reduced motion.** WCAG 2.3.3 is literally titled *Animation from Interactions*; a user who asked for less motion did not ask for particles to chase their cursor.
 
 ---
 

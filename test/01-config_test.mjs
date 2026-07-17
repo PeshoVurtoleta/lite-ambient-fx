@@ -27,6 +27,8 @@ const {
     sinLut,
     envelopeAlpha,
     degradeForReducedMotion,
+    sampleDepth,
+    resolvePointer,
 } = await import('../AmbientFX.js');
 
 describe('VERSION parity', () => {
@@ -41,9 +43,9 @@ describe('VERSION parity', () => {
 });
 
 describe('THEMES surface', () => {
-    const NAMES = ['Fire', 'Night', 'Ice', 'Frost', 'Toxic', 'Void', 'Dust', 'Aurora', 'Abyss'];
+    const NAMES = ['Fire', 'Night', 'Ice', 'Frost', 'Toxic', 'Void', 'Dust', 'Aurora', 'Abyss', 'Snow', 'Rain'];
 
-    test('exactly nine themes ship', () => {
+    test('exactly eleven themes ship', () => {
         assert.deepEqual(Object.keys(THEMES).sort(), NAMES.slice().sort());
     });
 
@@ -56,7 +58,7 @@ describe('THEMES surface', () => {
     test('every theme has the full behavior/palette shape', () => {
         for (const name of NAMES) {
             const t = THEMES[name];
-            assert.ok(['EMBER', 'MIST', 'FLOAT', 'CHAOS'].includes(t.behavior), name);
+            assert.ok(['EMBER', 'MIST', 'FLOAT', 'CHAOS', 'FALL'].includes(t.behavior), name);
             assert.ok(Array.isArray(t.colors) && t.colors.length >= 1, name);
             assert.equal(typeof t.spark, 'string', name);
             assert.equal(typeof t.wind.x, 'number', name);
@@ -81,7 +83,7 @@ describe('THEMES surface', () => {
     test('cross-behavior coverage: every behavior appears', () => {
         const seen = new Set();
         for (const name of NAMES) seen.add(THEMES[name].behavior);
-        assert.deepEqual(Array.from(seen).sort(), ['CHAOS', 'EMBER', 'FLOAT', 'MIST']);
+        assert.deepEqual(Array.from(seen).sort(), ['CHAOS', 'EMBER', 'FALL', 'FLOAT', 'MIST']);
     });
 });
 
@@ -276,7 +278,7 @@ describe('validateConfig -- hot-path field guards (v1.1.0)', () => {
         assert.throws(() => validateConfig(mergeThemeConfig(partial, null)));
     });
 
-    test('all nine built-in presets still pass the stricter guard', () => {
+    test('all eleven built-in presets still pass the stricter guard', () => {
         for (const name of Object.keys(THEMES)) {
             assert.doesNotThrow(() => validateConfig(THEMES[name]), name);
         }
@@ -320,5 +322,100 @@ describe('degradeForReducedMotion', () => {
         for (const name of Object.keys(THEMES)) {
             assert.doesNotThrow(() => validateConfig(degradeForReducedMotion(THEMES[name])), name);
         }
+    });
+});
+
+// ---- v1.2.0: parallax depth bands ----
+describe('sampleDepth', () => {
+    test('falls back to the continuous ramp when bands is absent or 0', () => {
+        for (const bands of [undefined, 0, 1, 4, null]) {
+            for (let i = 0; i < 200; i++) {
+                const z = sampleDepth(bands);
+                assert.ok(z >= 0.2 && z <= 1, 'z in range for bands=' + bands + ': ' + z);
+            }
+        }
+    });
+
+    test('every pre-1.2 preset is unbanded, so its depth ramp is unchanged', () => {
+        for (const name of ['Fire', 'Night', 'Ice', 'Frost', 'Toxic', 'Void', 'Dust', 'Aurora', 'Abyss']) {
+            assert.equal(THEMES[name].depthBands, undefined, name);
+        }
+    });
+
+    test('bands=3 quantizes into three separated layers', () => {
+        const hits = [0, 0, 0];
+        for (let i = 0; i < 3000; i++) {
+            const z = sampleDepth(3);
+            assert.ok(z >= 0.2 && z <= 1);
+            if (z < 0.45) hits[0]++;
+            else if (z < 0.75) hits[1]++;
+            else hits[2]++;
+        }
+        for (let i = 0; i < 3; i++) assert.ok(hits[i] > 700, 'band ' + i + ' populated: ' + hits[i]);
+    });
+
+    test('bands=2 takes the extremes, leaving the mid band empty', () => {
+        let mid = 0;
+        for (let i = 0; i < 2000; i++) {
+            const z = sampleDepth(2);
+            if (z > 0.45 && z < 0.75) mid++;
+        }
+        assert.equal(mid, 0, 'no particle lands in the middle band');
+    });
+
+    test('Snow and Rain ship banded', () => {
+        assert.equal(THEMES.Snow.depthBands, 3);
+        assert.equal(THEMES.Rain.depthBands, 3);
+    });
+
+    test('validateConfig rejects a bad depthBands', () => {
+        assert.throws(() => validateConfig({ ...THEMES.Snow, depthBands: 5 }), RangeError);
+        assert.throws(() => validateConfig({ ...THEMES.Snow, depthBands: 'three' }), RangeError);
+        assert.doesNotThrow(() => validateConfig({ ...THEMES.Snow, depthBands: 0 }));
+    });
+
+    test('validateConfig rejects a bad stretch but allows its absence', () => {
+        assert.throws(() => validateConfig({ ...THEMES.Rain, stretch: -1 }), RangeError);
+        assert.throws(() => validateConfig({ ...THEMES.Rain, stretch: NaN }), RangeError);
+        const noStretch = { ...THEMES.Rain };
+        delete noStretch.stretch;
+        assert.doesNotThrow(() => validateConfig(noStretch));
+    });
+});
+
+// ---- v1.2.0: pointer spec ----
+describe('resolvePointer', () => {
+    test('defaults to off', () => {
+        assert.deepEqual(resolvePointer(undefined), { mode: 'off', radius: 140, strength: 8 });
+        assert.deepEqual(resolvePointer({}), { mode: 'off', radius: 140, strength: 8 });
+    });
+
+    test('accepts repel and attract, filling in defaults', () => {
+        assert.equal(resolvePointer({ mode: 'repel' }).mode, 'repel');
+        assert.equal(resolvePointer({ mode: 'attract' }).radius, 140);
+    });
+
+    test('rejects an unknown mode', () => {
+        assert.throws(() => resolvePointer({ mode: 'push' }), RangeError);
+    });
+
+    test('rejects a non-positive or non-finite radius', () => {
+        assert.throws(() => resolvePointer({ mode: 'repel', radius: 0 }), RangeError);
+        assert.throws(() => resolvePointer({ mode: 'repel', radius: -10 }), RangeError);
+        assert.throws(() => resolvePointer({ mode: 'repel', radius: Infinity }), RangeError);
+    });
+
+    test('rejects a negative or non-finite strength', () => {
+        assert.throws(() => resolvePointer({ mode: 'repel', strength: -1 }), RangeError);
+        assert.throws(() => resolvePointer({ mode: 'repel', strength: NaN }), RangeError);
+        assert.doesNotThrow(() => resolvePointer({ mode: 'repel', strength: 0 }));
+    });
+
+    test('is pure -- returns a fresh object each call', () => {
+        const spec = { mode: 'repel' };
+        const a = resolvePointer(spec);
+        const b = resolvePointer(spec);
+        assert.notEqual(a, b);
+        assert.deepEqual(a, b);
     });
 });
