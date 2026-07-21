@@ -14,7 +14,8 @@ export type BehaviorName = BuiltInBehavior | (string & {});
 export type BuiltInTheme =
     | 'Fire' | 'Night' | 'Ice' | 'Frost' | 'Toxic' | 'Void'
     | 'Dust' | 'Aurora' | 'Abyss'
-    | 'Snow' | 'Rain';
+    | 'Snow' | 'Rain'
+    | 'Sakura' | 'Fireflies' | 'Meteor' | 'Cosmic' | 'Sandstorm' | 'Bioluminescence';
 
 /** Discrete parallax layers. 0 (or absent) keeps the original continuous z ramp. */
 export type DepthBands = 0 | 2 | 3;
@@ -82,6 +83,20 @@ export interface AmbientConfig {
 }
 
 export interface AmbientOptions {
+    /**
+     * Frame-budget auto-degradation (v1.4.0).
+     * - `undefined` / `false` / `null` -> off (default, no behavior change).
+     * - `true`                          -> on with default thresholds.
+     * - `FrameBudgetOptions`            -> on with custom thresholds and callback.
+     *
+     * When on, the tick loop tracks a rolling window of frame times and steps
+     * `count` down when p90 exceeds `targetMs` -- restoring toward the base
+     * when headroom returns. `baseConfig` is untouched; `config.count` reflects
+     * what is actually rendering. Compatible with reduced-motion (both degrades
+     * stack).
+     */
+    frameBudget?: boolean | FrameBudgetOptions | null;
+
     /** Preset name from THEMES. Defaults to 'Fire'. */
     theme?: ThemeName;
     /** Partial config to merge over the theme. `wind` merges shallowly. */
@@ -115,6 +130,16 @@ export interface AmbientOptions {
 }
 
 export interface AmbientInstance {
+    /** The active frame budget, or null when disabled. */
+    readonly frameBudget: FrameBudget | null;
+
+    /**
+     * Replace the frame-budget policy live. `null`/`false` disables,
+     * `true` re-enables with defaults, or pass a fresh options object.
+     */
+    setFrameBudget(spec: boolean | FrameBudgetOptions | null): void;
+
+
     setTheme(name: ThemeName): void;
     updateConfig(overrides: Partial<AmbientConfig>): void;
     /** The config actually being rendered (degraded when reduced-motion is active). */
@@ -392,3 +417,71 @@ export function lerpTheme<T extends AmbientConfig>(
     t: number,
     out?: T,
 ): T;
+
+
+// ============================================================
+//  FRAME BUDGET (v1.4.0)
+// ============================================================
+
+/**
+ * Options for the frame-budget auto-degrader.
+ * All fields optional; defaults tune for a ~50 fps floor.
+ */
+export interface FrameBudgetOptions {
+    /** p90 above this triggers a degrade step (ms). Default 20. */
+    targetMs?: number;
+    /** p90 below this triggers a restore step (ms). Default targetMs * 0.7. */
+    restoreMs?: number;
+    /** Frames between adjustments. Default 60. */
+    cooldown?: number;
+    /** Fraction of base count to add/subtract per step. Default 0.10. */
+    stepFrac?: number;
+    /** Never degrade below this count. Default 20. */
+    minCount?: number;
+    /** Called on transitions from -> to. Fires only on adjustments, not per frame. */
+    onDegrade?: (info: FrameBudgetEvent) => void;
+}
+
+export interface FrameBudgetEvent {
+    from: number;
+    to: number;
+    reason: 'over-budget' | 'restore';
+    /** p90 frame time (ms) at the transition. */
+    p90: number;
+}
+
+/**
+ * A running frame-budget state machine. Owned by an AmbientInstance when
+ * `options.frameBudget` was set, or constructed standalone via
+ * {@link createFrameBudget} for a custom render loop.
+ */
+export interface FrameBudget {
+    readonly targetMs: number;
+    readonly restoreMs: number;
+    readonly minCount: number;
+    /** The user-requested count -- the ceiling for restore steps. */
+    readonly baseCount: number;
+    /** The currently-rendering count after any degrade. */
+    readonly currentCount: number;
+    /** True once the rolling window has 32 samples. */
+    readonly windowFilled: boolean;
+
+    /**
+     * Feed a frame-time sample and the current count.
+     * @returns `-1` for no change, or the new count to apply.
+     */
+    note(dtMs: number, count: number): number;
+
+    /** Update the base count when the effective cfg.count changes. */
+    setBaseCount(n: number): void;
+
+    /** Wipe the window -- call on visibility resume or long pauses. */
+    reset(): void;
+}
+
+/**
+ * Build a frame-budget auto-degrader. Pure state machine: no DOM access,
+ * no timers. Usable standalone with a custom render loop, or wired into
+ * createAmbientFX via `options.frameBudget`.
+ */
+export function createFrameBudget(opts?: FrameBudgetOptions): FrameBudget;

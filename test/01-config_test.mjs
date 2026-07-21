@@ -43,9 +43,9 @@ describe('VERSION parity', () => {
 });
 
 describe('THEMES surface', () => {
-    const NAMES = ['Fire', 'Night', 'Ice', 'Frost', 'Toxic', 'Void', 'Dust', 'Aurora', 'Abyss', 'Snow', 'Rain'];
+    const NAMES = ['Fire', 'Night', 'Ice', 'Frost', 'Toxic', 'Void', 'Dust', 'Aurora', 'Abyss', 'Snow', 'Rain', 'Sakura', 'Fireflies', 'Meteor', 'Cosmic', 'Sandstorm', 'Bioluminescence'];
 
-    test('exactly eleven themes ship', () => {
+    test('exactly seventeen themes ship', () => {
         assert.deepEqual(Object.keys(THEMES).sort(), NAMES.slice().sort());
     });
 
@@ -278,7 +278,7 @@ describe('validateConfig -- hot-path field guards (v1.1.0)', () => {
         assert.throws(() => validateConfig(mergeThemeConfig(partial, null)));
     });
 
-    test('all eleven built-in presets still pass the stricter guard', () => {
+    test('all seventeen built-in presets still pass the stricter guard', () => {
         for (const name of Object.keys(THEMES)) {
             assert.doesNotThrow(() => validateConfig(THEMES[name]), name);
         }

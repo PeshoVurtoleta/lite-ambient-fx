@@ -114,47 +114,178 @@
             color: var(--phosphor);
         }
 
-        /* Theme picker ────────────────────────────── */
+        /* Theme picker -- styled dropdown ─────────── */
         .themes {
             display: flex;
-            gap: 0.4rem;
+            gap: 0.5rem;
             padding: 0.625rem 1rem;
             background: var(--panel);
             border-bottom: 1px solid var(--border);
             backdrop-filter: blur(0.75rem);
-            flex-wrap: wrap;
             justify-content: center;
+            align-items: center;
         }
 
-        .theme-btn {
-            padding: 0.375rem 0.85rem;
+        .theme-select {
+            position: relative;
+            min-width: 16rem;
+        }
+
+        .theme-select-btn {
+            width: 100%;
+            padding: 0.5rem 2rem 0.5rem 0.85rem;
             border: 1px solid var(--border);
             border-radius: 0.5rem;
-            background: transparent;
-            color: var(--dim);
+            background: rgba(0, 0, 0, 0.35);
+            color: var(--text);
             font-family: 'JetBrains Mono', ui-monospace, monospace;
-            font-size: 0.65rem;
+            font-size: 0.75rem;
             cursor: pointer;
             transition: color 0.15s, border-color 0.15s, background 0.15s;
             display: flex;
             align-items: center;
-            gap: 0.375rem;
+            gap: 0.5rem;
             text-transform: uppercase;
             letter-spacing: 0.05em;
+            text-align: left;
+        }
+
+        .theme-select-btn::after {
+            content: '';
+            position: absolute;
+            right: 0.85rem;
+            top: 50%;
+            width: 0.4rem;
+            height: 0.4rem;
+            border-right: 1px solid var(--phosphor);
+            border-bottom: 1px solid var(--phosphor);
+            transform: translateY(-70%) rotate(45deg);
+            transition: transform 0.15s;
+        }
+
+        .theme-select:is(.open) .theme-select-btn::after {
+            transform: translateY(-30%) rotate(-135deg);
         }
 
         @media (hover: hover) {
-            .theme-btn:hover {
+            .theme-select-btn:hover {
                 border-color: var(--phosphor);
+                background: rgba(0, 0, 0, 0.55);
+            }
+        }
+
+        .theme-select-btn .name {
+            color: var(--phosphor);
+            flex: 1;
+        }
+
+        .theme-select-btn .beh {
+            color: var(--dim);
+            font-size: 0.6rem;
+            padding: 0.125rem 0.375rem;
+            border: 1px solid var(--border);
+            border-radius: 0.25rem;
+        }
+
+        .theme-list {
+            position: absolute;
+            top: calc(100% + 0.375rem);
+            left: 0;
+            right: 0;
+            max-height: 22rem;
+            overflow-y: auto;
+            padding: 0.25rem;
+            margin: 0;
+            list-style: none;
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 0.5rem;
+            box-shadow: 0 0.5rem 1.5rem rgba(0, 0, 0, 0.75);
+            backdrop-filter: blur(1rem);
+            z-index: 30;
+            display: none;
+        }
+
+        .theme-select:is(.open) .theme-list {
+            display: block;
+        }
+
+        .theme-item {
+            padding: 0.5rem 0.75rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            cursor: pointer;
+            color: var(--dim);
+            font-family: 'JetBrains Mono', ui-monospace, monospace;
+            font-size: 0.7rem;
+            border-radius: 0.25rem;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            transition: background 0.1s, color 0.1s;
+        }
+
+        @media (hover: hover) {
+            .theme-item:hover {
+                background: rgba(52, 208, 88, 0.08);
                 color: var(--text);
             }
         }
 
-        .theme-btn:is(.active) {
-            border-color: var(--phosphor);
+        .theme-item:is(.active) {
             color: var(--phosphor);
             background: var(--phosphor-soft);
         }
+
+        .theme-item :is(.name) { flex: 1; }
+        .theme-item :is(.beh) {
+            font-size: 0.6rem;
+            padding: 0.125rem 0.375rem;
+            border: 1px solid var(--border);
+            border-radius: 0.25rem;
+            color: var(--dim);
+        }
+        .theme-item:is(.active) :is(.beh) {
+            border-color: var(--phosphor);
+        }
+
+        .theme-item:is(.custom)::before {
+            content: '';
+            width: 0.375rem;
+            height: 0.375rem;
+            border-radius: 50%;
+            background: var(--phosphor);
+            flex-shrink: 0;
+        }
+
+        /* Frame-budget widget (v1.4.0) ────────────── */
+        .fb-widget {
+            display: flex;
+            flex-direction: column;
+            gap: 0.375rem;
+            padding: 0.5rem;
+            border: 1px solid var(--border);
+            border-radius: 0.375rem;
+            background: rgba(0, 0, 0, 0.25);
+        }
+
+        .fb-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.65rem;
+            color: var(--dim);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .fb-row .v {
+            color: var(--text);
+            font-family: 'JetBrains Mono', ui-monospace, monospace;
+        }
+
+        .fb-row.degraded .v { color: #ffcc00; }
+        .fb-row.restored .v { color: var(--phosphor); }
 
         /* Control panel ───────────────────────────── */
         .panel {
@@ -400,10 +531,20 @@
             <div>fps: <span class="v" id="hudFps">--</span></div>
             <div>a11y: <span class="v" id="hudA11y">--</span></div>
             <div>ptr: <span class="v" id="hudPtr">--</span></div>
+            <div>budget: <span class="v" id="hudBudget">--</span></div>
         </div>
     </div>
 
-    <div class="themes" id="themes"></div>
+    <div class="themes">
+        <div class="theme-select" id="themeSelect">
+            <button class="theme-select-btn" id="themeSelectBtn" type="button"
+                    aria-haspopup="listbox" aria-expanded="false">
+                <span class="name" id="themeSelectName">--</span>
+                <span class="beh" id="themeSelectBeh">--</span>
+            </button>
+            <ul class="theme-list" id="themeList" role="listbox" tabindex="-1"></ul>
+        </div>
+    </div>
 </div>
 
 <button class="toggle-btn shifted" id="togglePanel" aria-label="Toggle controls" title="Toggle panel">&#9654;</button>
@@ -549,7 +690,11 @@
 
   // ── Cached DOM lookups (all at init) ───────────────────────
   const $canvas = document.getElementById("fxCanvas");
-  const $themes = document.getElementById("themes");
+  const $themeSelect = document.getElementById("themeSelect");
+  const $themeSelectBtn = document.getElementById("themeSelectBtn");
+  const $themeSelectName = document.getElementById("themeSelectName");
+  const $themeSelectBeh = document.getElementById("themeSelectBeh");
+  const $themeList = document.getElementById("themeList");
   const $panel = document.getElementById("panel");
   const $toggle = document.getElementById("togglePanel");
   const $badgeBehavior = document.getElementById("badgeBehavior");
@@ -566,6 +711,7 @@
   const $btnFreeze = document.getElementById("btnFreeze");
   const $btnRegister = document.getElementById("btnRegister");
   const $hudPtr = document.getElementById("hudPtr");
+  const $hudBudget = document.getElementById("hudBudget");
 
   const $depthBtns = [
     document.getElementById("bDepth0"),
@@ -629,43 +775,92 @@
 
   // ── FX instance ────────────────────────────────────────────
   let currentTheme = "Fire";
-  const fx = createAmbientFX($canvas, { theme: currentTheme });
+  let lastBudgetEvent = null;
+  const fx = createAmbientFX($canvas, {
+    frameBudget: {
+      targetMs: 20,
+      onDegrade: (e) => {
+        lastBudgetEvent = e;
+      },
+    }, theme: currentTheme });
 
   // ── Theme buttons ──────────────────────────────────────────
   // Rendered from THEME_META, never from a hardcoded list. registerTheme() keeps
   // THEME_META in sync, so a re-render is all a new preset needs.
   const BUILT_IN_COUNT = THEME_META.length;
 
-  function renderThemeButtons() {
-    $themes.textContent = "";
+  function renderThemeSelect() {
+    // Header (currently selected)
+    const active = THEME_META.find(m => m.id === currentTheme);
+    if (active) {
+      $themeSelectName.textContent = active.name;
+      $themeSelectBeh.textContent = active.behavior;
+    }
+
+    // List body
+    $themeList.textContent = "";
     for (let i = 0; i < THEME_META.length; i++) {
       const m = THEME_META[i];
-      const btn = document.createElement("button");
-      btn.className = "theme-btn"
+      const li = document.createElement("li");
+      li.className = "theme-item"
         + (m.id === currentTheme ? " active" : "")
         + (i >= BUILT_IN_COUNT ? " custom" : "");
-      btn.textContent = m.name;
-      btn.dataset.theme = m.id;
-      $themes.appendChild(btn);
+      li.dataset.id = m.id;
+      li.setAttribute("role", "option");
+      li.setAttribute("aria-selected", m.id === currentTheme ? "true" : "false");
+
+      const name = document.createElement("span");
+      name.className = "name";
+      name.textContent = m.name;
+      const beh = document.createElement("span");
+      beh.className = "beh";
+      beh.textContent = m.behavior;
+      li.appendChild(name);
+      li.appendChild(beh);
+      $themeList.appendChild(li);
     }
   }
 
-  $themes.addEventListener("click", (ev) => {
-    const btn = ev.target.closest(".theme-btn");
-    if (btn === null) return;
-    switchTheme(btn.dataset.theme);
+  // Dropdown open/close
+  let themeMenuOpen = false;
+  function setThemeMenu(open) {
+    themeMenuOpen = open;
+    if (open) $themeSelect.classList.add("open");
+    else $themeSelect.classList.remove("open");
+    $themeSelectBtn.setAttribute("aria-expanded", open ? "true" : "false");
+  }
+
+  $themeSelectBtn.addEventListener("pointerdown", (ev) => {
+    ev.preventDefault();
+    setThemeMenu(!themeMenuOpen);
   });
+
+  $themeList.addEventListener("click", (ev) => {
+    const li = ev.target.closest(".theme-item");
+    if (!li) return;
+    const id = li.dataset.id;
+    if (id) switchTheme(id);
+    setThemeMenu(false);
+  });
+
+  // Close on outside click or escape.
+  document.addEventListener("pointerdown", (ev) => {
+    if (!themeMenuOpen) return;
+    if ($themeSelect.contains(ev.target)) return;
+    setThemeMenu(false);
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && themeMenuOpen) setThemeMenu(false);
+  });
+
+  // Compat alias -- older call sites still say renderThemeButtons().
+  const renderThemeButtons = renderThemeSelect;
 
   function switchTheme(id) {
     if (id === currentTheme) return;
     currentTheme = id;
     fx.setTheme(id);
-    // Toggle active class without re-querying siblings.
-    const buttons = $themes.children;
-    for (let i = 0; i < buttons.length; i++) {
-      const b = buttons[i];
-      b.classList.toggle("active", b.dataset.theme === id);
-    }
+    renderThemeSelect();
     syncSliders();
     syncBadges();
     syncDepth();
@@ -907,6 +1102,22 @@
       const fps = ((hudFrames * 1000) / dt) | 0;
       $hudFps.textContent = fps.toString();
       $hudCount.textContent = fx.count.toString();
+      const b = fx.frameBudget;
+      if (b) {
+        $hudBudget.textContent = b.currentCount + " / " + b.baseCount;
+        if (lastBudgetEvent) {
+          $hudBudget.style.color = lastBudgetEvent.reason === "restore" ? "#7cf574" : "#ffcc00";
+          if (!$hudBudget._resetTimer) {
+            $hudBudget._resetTimer = setTimeout(() => {
+              $hudBudget.style.color = "";
+              $hudBudget._resetTimer = null;
+              lastBudgetEvent = null;
+            }, 2000);
+          }
+        }
+      } else {
+        $hudBudget.textContent = "off";
+      }
       $roRender.textContent = (fx.config.count | 0).toString();
       hudFrames = 0;
       hudLastMs = now;

@@ -5,6 +5,105 @@ All notable changes to `@zakkster/lite-ambient-fx` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] -- 2026-07-21
+
+Runtime hardening: frame-budget auto-degrade + six new atmospheres.
+
+### Added
+
+- **`createFrameBudget(opts?)`** -- exported. Rolling-p90 frame-time watcher that
+  steps `count` down under load and restores toward the base count when
+  headroom returns. Fixed 32-slot `Float32Array` ring with bitmask indexing;
+  transition callback fires only on adjustments so steady state is zero
+  allocations.
+
+- **`AmbientOptions.frameBudget`** -- `boolean | FrameBudgetOptions | null`.
+  `false`/`null`/omitted is off (no behavior change from v1.3.0). `true`
+  turns on defaults (targetMs 20 ms, restoreMs 14 ms, cooldown 60 frames,
+  minCount 20, stepFrac 0.10). An object customises thresholds and adds an
+  `onDegrade({from, to, reason, p90})` callback.
+
+  ```js
+  const fx = createAmbientFX(canvas, {
+      theme: 'Aurora',
+      frameBudget: {
+          targetMs: 20,
+          onDegrade: e => console.log('ambient-fx', e.reason, e.from, '->', e.to),
+      },
+  });
+  ```
+
+- **`instance.frameBudget`** -- read-only accessor for the running budget or `null`.
+- **`instance.setFrameBudget(spec)`** -- swap the policy live.
+
+- **Six new built-in atmospheres** (17 total now):
+  - **Sakura** -- pink FALL petals with gentle sway and low turbulence.
+  - **Fireflies** -- warm yellow FLOAT with heavy alpha pulse; sparse and meandering.
+  - **Meteor Shower** -- ice-white -> orange -> deep red FALL streaks with stretch 4.5.
+  - **Cosmic Drift** -- slow purple/violet EMBER with starry sparks.
+  - **Sandstorm** -- horizontal tan/ochre MIST driven by heavy wind (wind.x = 2.4).
+  - **Bioluminescence** -- deep aquamarine CHAOS with cyan sparks and downward pull.
+
+- **Styled dropdown theme picker** in the demo. The 17 themes no longer fit as a
+  wrapped button row -- replaced with an accessible listbox (`role="listbox"`,
+  `aria-expanded`, keyboard-close via Escape, outside-click closes) that shows
+  each theme's name and behavior badge.
+
+- **Frame-budget HUD line** in the demo -- `budget: <curr>/<base>` with
+  transient color highlight (green on restore, yellow on over-budget) so the
+  degrader's decisions are visible under load.
+
+### Changed
+
+- `BuiltInTheme` union in the type declarations expanded to all 17 themes.
+- Test file `test/01-config_test.mjs` updated: NAMES list and both
+  "eleven themes" assertions bumped to "seventeen".
+- `package.json` version -> 1.4.0. Keywords extended with
+  `frame-budget`, `auto-degrade`, and the six new atmosphere names.
+- `devDependencies` add `@zakkster/lite-gc-profiler`, `@zakkster/lite-leak`,
+  and `@zakkster/lite-signal@^1.5.0-beta.3` (peer of lite-leak) to power
+  the hardened test suite.
+
+### Tests
+
+- **`test/05-frame-budget_test.mjs`** -- 15 tests: construction guardrails,
+  window-fill no-op, healthy-frames no-op, degrade-to-floor, cooldown spacing,
+  restore-to-base, restore-ceiling, `setBaseCount` live update, `reset` wipe,
+  10 000-sample zero-alloc soft check.
+- **`test/07-gc-tick-hotpath_test.mjs`** -- per-behavior GC hot-path gate.
+  For each of EMBER, MIST, FLOAT, CHAOS, FALL: 5000 ticks against a 500-particle
+  preallocated pool under `lite-gc-profiler`; asserts `maxMajor: 0`.
+- **`test/08-leak-lifecycle_test.mjs`** -- 100 mount/destroy cycles under
+  `lite-leak`'s timer + listener + observer + async-retention kernels.
+  Asserts both `tracker.audit()` empty and `domSnapshot()` returns to
+  baseline. Catches forgotten `disconnect()` / `removeEventListener` /
+  `cancelAnimationFrame`.
+- **`test/09-color-pipeline-gc_test.mjs`** -- v1.3.0 color pipeline zero-alloc
+  audit: `lerpTheme(a, b, t, scratch)` x 10 000, `parseColor(hex, out)` x 100 000,
+  `lerpOklch(a, b, t, out)` x 100 000. All bounded to a tight minor budget.
+- **`test/10-audit-differential_test.mjs`** -- differential sanity: a pooled
+  tick vs a leaky tick through the same profiler; leaky must produce strictly
+  more GC. Proves the audit environment itself is working before you trust
+  `07`-`09`.
+- **DOM stub helpers** in `test/_helpers/dom-stub.mjs`: minimal shim so the
+  leak-lifecycle test runs without jsdom. Extended in v1.4.0 for
+  `ctx.setTransform`, `document.createElement`.
+
+### Bundle
+
+- **209 tests / 35 suites, 100% pass** on Node 20+.
+- `AmbientFX.js` grew to accommodate frame-budget (still one file, still zero
+  runtime dependencies -- profilers are `devDependencies`, not `dependencies`).
+
+### Not in this release
+
+- **Worker mode (`/worker` entry)** deferred to v1.5.0. Requires syncing the
+  built-in behavior bodies into a self-contained worker body and pairing with
+  a conformance test to guard drift.
+
+- **`COOKBOOK.md`** ships alongside v1.4.0 with recipes (see `COOKBOOK.md`
+  at repo root).
+
 ## v1.3.0
 
 Color pipeline pass. Identity constraint preserved: one file, zero dependencies.

@@ -127,7 +127,7 @@ The `Snow` and `Rain` presets here are backdrops. They are the cheap cousin, and
 
 ---
 
-## The eleven shipped presets
+## The seventeen shipped presets
 
 | Preset   | Behavior | Vibe                                                        |
 | -------- | -------- | ----------------------------------------------------------- |
@@ -142,12 +142,18 @@ The `Snow` and `Rain` presets here are backdrops. They are the cheap cousin, and
 | `Abyss`  | CHAOS    | Deep indigo flicker with cyan sparks *(v1.1)*                |
 | `Snow`   | FALL     | Banded snowfall, per-flake terminal velocity + sway *(v1.2)* |
 | `Rain`   | FALL     | Fast stretched streaks on a hard sidewind *(v1.2)*           |
+| `Sakura`          | FALL     | Pink petals with gentle sway and low turbulence *(v1.4)*   |
+| `Fireflies`       | FLOAT    | Warm yellow float with heavy alpha pulse; sparse *(v1.4)*  |
+| `Meteor`          | FALL     | White->orange->red streaks with heavy stretch *(v1.4)*     |
+| `Cosmic`          | EMBER    | Slow purple/violet rise with starry sparks *(v1.4)*        |
+| `Sandstorm`       | MIST     | Horizontal tan/ochre driven by a heavy wind *(v1.4)*       |
+| `Bioluminescence` | CHAOS    | Deep aquamarine CHAOS with cyan sparks *(v1.4)*            |
 
 Every preset is a full `AmbientConfig`; you can inspect them at `THEMES[name]` and copy any field into `overrides`. Add your own with [`registerTheme`](#adding-a-custom-theme).
 
 ---
 
-## The four behaviors
+## The five behaviors
 
 | Behavior  | Motion                                              | Life model                                              | Best for                             |
 | --------- | --------------------------------------------------- | ------------------------------------------------------- | ------------------------------------ |
@@ -284,6 +290,39 @@ For a fully static single frame, pause immediately after mounting:
 const fx = createAmbientFX(canvas, { theme: "Frost" });
 if (fx.reducedMotion) fx.pause();   // one composed frame, then nothing moves
 ```
+
+---
+
+## Frame budget (v1.4.0)
+
+Opt-in auto-degrade. The tick loop tracks a rolling 32-sample window of frame
+times and steps `count` down when p90 exceeds `targetMs`, restoring toward the
+base when headroom returns. Zero allocations in steady state -- the callback
+fires only on transitions.
+
+```js
+const fx = createAmbientFX(canvas, {
+    theme: 'Aurora',
+    frameBudget: {
+        targetMs: 20,        // p90 above 20 ms -> degrade
+        onDegrade: (e) => console.log(e.reason, e.from, '->', e.to),
+    },
+});
+
+fx.frameBudget.currentCount;     // what's actually rendering
+fx.frameBudget.baseCount;        // the current ceiling for restore
+fx.setFrameBudget({ targetMs: 16 });   // swap the policy live
+fx.setFrameBudget(null);         // disable
+```
+
+Full options: `targetMs` (default 20), `restoreMs` (default `targetMs * 0.7`),
+`cooldown` (default 60 frames), `stepFrac` (default 0.10), `minCount`
+(default 20), `onDegrade`. `createFrameBudget(opts)` is also exported for
+standalone use with a custom render loop.
+
+Compatible with reduced-motion -- the restore ceiling tracks the effective
+`cfg.count`, so restore never blows through the accessibility floor. See
+`COOKBOOK.md` recipe 7 for a fuller walkthrough.
 
 ---
 

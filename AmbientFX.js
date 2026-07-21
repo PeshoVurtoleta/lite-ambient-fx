@@ -14,7 +14,7 @@
  * (c) 2026 Zahary Shinikchiev. MIT.
  */
 
-export const VERSION = '1.3.0';
+export const VERSION = '1.4.0';
 
 // ============================================================
 //  THEME PRESETS
@@ -172,6 +172,108 @@ export const THEMES = Object.assign(Object.create(null), {
         depthBands: 3,
         stretch: 2.2,
     },
+
+    // ---- v1.4.0 new atmospheres --------------------------------------
+
+    // Sakura -- pink petals falling gently. FALL with high stretch and low
+    // turbulence for lazy drift; sparks are near-white to catch the light.
+    Sakura: {
+        behavior: 'FALL',
+        colors: ['#ffb7c5', '#f4b6c2', '#ffe4ec'],
+        spark: '#ffffff',
+        count: 240,
+        wind: { x: 0.06, y: 0.0 },
+        decay: 0.0018,
+        speed: 0.6,
+        size: 8,
+        alpha: 0.75,
+        turbulence: 0.05,
+        depthBands: 3,
+        stretch: 1.6,
+    },
+
+    // Fireflies -- warm yellow FLOAT with pronounced alpha pulse. Slow,
+    // sparse, meandering. High turbulence gives the "wandering" feel.
+    Fireflies: {
+        behavior: 'FLOAT',
+        colors: ['#f5e488', '#ffd166', '#fff2a8'],
+        spark: '#fffbe6',
+        count: 90,
+        wind: { x: 0.0, y: -0.05 },
+        decay: 0.0016,
+        speed: 0.4,
+        size: 3.5,
+        alpha: 0.9,
+        turbulence: 1.2,
+        depthBands: 2,
+    },
+
+    // Meteor -- streaks against a dark sky. FALL with heavy stretch (comet
+    // tails) and high speed. Colors are ice-white->orange->deep red.
+    Meteor: {
+        behavior: 'FALL',
+        colors: ['#eaf6ff', '#ffc078', '#e63946'],
+        spark: '#ffffff',
+        count: 60,
+        wind: { x: -0.08, y: 0.0 },
+        decay: 0.007,
+        speed: 5.0,
+        size: 4,
+        alpha: 1.0,
+        turbulence: 0.15,
+        depthBands: 3,
+        stretch: 4.5,
+    },
+
+    // Cosmic -- deep-space rising particles, slow purple->violet EMBER with
+    // starry sparks. Low turbulence so the drift is grand and steady.
+    Cosmic: {
+        behavior: 'EMBER',
+        colors: ['#4a1a72', '#7c3aed', '#a78bfa'],
+        spark: '#f5f3ff',
+        count: 180,
+        wind: { x: 0.0, y: -0.15 },
+        decay: 0.0025,
+        speed: 0.9,
+        size: 4,
+        alpha: 0.85,
+        turbulence: 0.25,
+        depthBands: 3,
+    },
+
+    // Sandstorm -- horizontal MIST driven by heavy wind, tan/ochre palette.
+    // Faster than the fog-like presets, less alpha so it reads as dust rather
+    // than cloud.
+    Sandstorm: {
+        behavior: 'MIST',
+        colors: ['#a67b3a', '#c8955c', '#d9b382'],
+        spark: '#f4e2b6',
+        count: 140,
+        wind: { x: 2.4, y: -0.1 },
+        decay: 0.003,
+        speed: 1.4,
+        size: 42,
+        alpha: 0.35,
+        turbulence: 0.6,
+        depthBands: 2,
+    },
+
+    // Bioluminescence -- deep aquamarine CHAOS with cyan sparks. Slow,
+    // downward-biased pull like plankton in a current. Wide alpha window so
+    // the "flicker" reads even at low counts.
+    Bioluminescence: {
+        behavior: 'CHAOS',
+        colors: ['#00b4d8', '#0077b6', '#48cae4'],
+        spark: '#caf0f8',
+        count: 220,
+        wind: { x: 0.05, y: 0.08 },
+        decay: 0.003,
+        speed: 0.7,
+        size: 3.5,
+        alpha: 0.75,
+        turbulence: 0.35,
+        depthBands: 3,
+    },
 });
 
 /**
@@ -191,6 +293,12 @@ export const THEME_META = [
     { id: 'Abyss',  name: 'Abyss',       icon: 'hole',  behavior: 'CHAOS' },
     { id: 'Snow',   name: 'Snowfall',    icon: 'snow',  behavior: 'FALL'  },
     { id: 'Rain',   name: 'Downpour',    icon: 'rain',  behavior: 'FALL'  },
+    { id: 'Sakura',           name: 'Sakura',           icon: 'petal',   behavior: 'FALL'  },
+    { id: 'Fireflies',        name: 'Fireflies',        icon: 'spark',   behavior: 'FLOAT' },
+    { id: 'Meteor',           name: 'Meteor Shower',    icon: 'comet',   behavior: 'FALL'  },
+    { id: 'Cosmic',           name: 'Cosmic Drift',     icon: 'orbit',   behavior: 'EMBER' },
+    { id: 'Sandstorm',        name: 'Sandstorm',        icon: 'dune',    behavior: 'MIST'  },
+    { id: 'Bioluminescence',  name: 'Bioluminescence',  icon: 'wave',    behavior: 'CHAOS' },
 ];
 
 // ============================================================
@@ -1001,6 +1109,158 @@ export function lerpTheme(a, b, t, out) {
 }
 
 
+
+// ============================================================
+//  FRAME-BUDGET AUTO-DEGRADER  (v1.4.0)
+// ============================================================
+
+/**
+ * Rolling p90 frame-time watcher that adjusts `count` down under load and
+ * restores toward the base when headroom returns. Fixed 32-slot Float32Array
+ * ring (power of 2 -> bitmask indexing). Callback fires only on transitions,
+ * not per frame, so steady-state cost is zero allocations.
+ *
+ * Wired into createAmbientFX via `options.frameBudget` and the returned
+ * `instance.frameBudget` / `instance.setFrameBudget(spec)` accessors. Also
+ * usable standalone if you want to drive count from a custom render loop.
+ *
+ * @example
+ *   const fx = createAmbientFX(canvas, {
+ *       theme: 'Aurora',
+ *       frameBudget: {
+ *           targetMs: 20,
+ *           onDegrade: e => console.log(e.reason, e.from, '->', e.to),
+ *       },
+ *   });
+ */
+
+const FRAME_BUDGET_RING_SIZE = 32;
+const FRAME_BUDGET_RING_MASK = 31;
+
+// Module-scratch for p90 sort. Zero-allocation across successive note() calls.
+const _frameBudgetSortScratch = new Float32Array(FRAME_BUDGET_RING_SIZE);
+
+function _frameBudgetP90(ring, ringLen) {
+    for (let i = 0; i < ringLen; i++) _frameBudgetSortScratch[i] = ring[i];
+    _frameBudgetSortScratch.subarray(0, ringLen).sort();
+    const idx = ringLen - 1 - ((ringLen * 0.1) | 0);
+    return _frameBudgetSortScratch[idx];
+}
+
+/**
+ * Build a frame-budget auto-degrader. Returns a pure state machine: no DOM
+ * access, no timers, no owner registration. Feed `note(dtMs, count)` on every
+ * frame; act on the return value.
+ *
+ * All options optional. Defaults tune for a ~50 fps floor (targetMs 20 ms)
+ * with 30% headroom before restore.
+ *
+ * @param {object} [opts]
+ * @param {number} [opts.targetMs=20]   p90 above this triggers a degrade step
+ * @param {number} [opts.restoreMs]     defaults to targetMs * 0.7
+ * @param {number} [opts.cooldown=60]   frames between adjustments
+ * @param {number} [opts.stepFrac=0.1]  fraction of base count to add/subtract per step
+ * @param {number} [opts.minCount=20]   hard floor -- never degrades below this
+ * @param {(e:{from:number,to:number,reason:string,p90:number}) => void} [opts.onDegrade]
+ */
+export function createFrameBudget(opts) {
+    const o = opts || {};
+    const targetMs   = o.targetMs   != null ? +o.targetMs   : 20;
+    const restoreMs  = o.restoreMs  != null ? +o.restoreMs  : targetMs * 0.7;
+    const cooldown   = o.cooldown   != null ? (o.cooldown | 0) : 60;
+    const stepFrac   = o.stepFrac   != null ? +o.stepFrac   : 0.1;
+    const minCount   = o.minCount   != null ? (o.minCount | 0) : 20;
+    const onDegrade  = typeof o.onDegrade === 'function' ? o.onDegrade : null;
+
+    if (!(targetMs > 0)) throw new RangeError('frameBudget.targetMs must be > 0');
+    if (!(restoreMs > 0 && restoreMs < targetMs)) {
+        throw new RangeError('frameBudget.restoreMs must be in (0, targetMs)');
+    }
+
+    const ring = new Float32Array(FRAME_BUDGET_RING_SIZE);
+    let ringIdx = 0;
+    let ringLen = 0;
+    let cooldownRemaining = 0;
+    let baseCount = 0;
+    let currentCount = 0;
+
+    return {
+        get targetMs()     { return targetMs; },
+        get restoreMs()    { return restoreMs; },
+        get minCount()     { return minCount; },
+        get baseCount()    { return baseCount; },
+        get currentCount() { return currentCount; },
+        get windowFilled() { return ringLen === FRAME_BUDGET_RING_SIZE; },
+
+        /**
+         * Called from the tick loop with the clamped dt in ms and the
+         * currently-rendering count.
+         * @returns {number} negative -> no change, else the new count to apply.
+         */
+        note(dtMs, count) {
+            ring[ringIdx] = dtMs;
+            ringIdx = (ringIdx + 1) & FRAME_BUDGET_RING_MASK;
+            if (ringLen < FRAME_BUDGET_RING_SIZE) ringLen++;
+
+            if (baseCount === 0 && count > 0) baseCount = count;
+            currentCount = count;
+
+            if (cooldownRemaining > 0) { cooldownRemaining--; return -1; }
+            if (ringLen < FRAME_BUDGET_RING_SIZE) return -1;
+
+            const p = _frameBudgetP90(ring, ringLen);
+
+            if (p > targetMs && currentCount > minCount) {
+                const step = Math.max(1, (baseCount * stepFrac) | 0);
+                const next = Math.max(minCount, currentCount - step);
+                cooldownRemaining = cooldown;
+                if (onDegrade) onDegrade({
+                    from: currentCount, to: next, reason: 'over-budget', p90: p,
+                });
+                return next;
+            }
+
+            if (p < restoreMs && currentCount < baseCount) {
+                const step = Math.max(1, (baseCount * stepFrac) | 0);
+                const next = Math.min(baseCount, currentCount + step);
+                cooldownRemaining = cooldown;
+                if (onDegrade) onDegrade({
+                    from: currentCount, to: next, reason: 'restore', p90: p,
+                });
+                return next;
+            }
+
+            return -1;
+        },
+
+        /** Update the base count. Call whenever `cfg.count` shifts. */
+        setBaseCount(n) {
+            baseCount = n | 0;
+            if (currentCount === 0) currentCount = baseCount;
+        },
+
+        /** Wipe the window. Call on visibility resume or long pauses. */
+        reset() {
+            ringIdx = 0;
+            ringLen = 0;
+            cooldownRemaining = 0;
+        },
+    };
+}
+
+
+/**
+ * Internal: resolve a frameBudget option value into an instance or null.
+ * Not exported -- shape matches the createAmbientFX option contract.
+ */
+function _resolveFrameBudget(spec) {
+    if (spec == null || spec === false) return null;
+    if (spec === true) return createFrameBudget({});
+    if (typeof spec === 'object') return createFrameBudget(spec);
+    throw new TypeError('frameBudget: expected boolean | object | null, got ' + typeof spec);
+}
+
+
 // ============================================================
 //  BEHAVIOR REGISTRY
 // ============================================================
@@ -1479,6 +1739,26 @@ export function createAmbientFX(canvas, options) {
             primeSprites();
         }
         initParticles();
+        if (budget !== null) budget.setBaseCount(cfg.count);
+    }
+
+    /** Grow or shrink the pool to `next` in place. Called by the frame budget. */
+    function adjustCount(next) {
+        if (next === particles.length) return;
+        if (next > particles.length) {
+            const behavior = resolveBehavior(cfg.behavior);
+            frame.cfg = cfg;
+            frame.W = W;
+            frame.H = H;
+            frame.isInit = false;
+            while (particles.length < next) {
+                const p = makeParticle();
+                particles.push(p);
+                behavior.spawn(p, frame);
+            }
+        } else {
+            particles.length = next;
+        }
     }
 
     // Monomorphic particle pool.
@@ -1495,6 +1775,9 @@ export function createAmbientFX(canvas, options) {
     let raf = null;
     let running = false;
     let destroyed = false;
+
+    // Frame-budget auto-degrader (v1.4.0). Null when not configured.
+    let budget = _resolveFrameBudget(opts && opts.frameBudget);
 
     // Pooled frame context. Allocated once, mutated per frame/spawn.
     // Behaviors receive this and MUST NOT retain references.
@@ -1675,6 +1958,11 @@ export function createAmbientFX(canvas, options) {
         lastTime = timestamp;
         if (dt < 1) return;
 
+        if (budget !== null) {
+            const nextCount = budget.note(dt, particles.length);
+            if (nextCount >= 0) adjustCount(nextCount);
+        }
+
         const behavior = resolveBehavior(cfg.behavior);
 
         // Populate the pooled frame context. No allocation.
@@ -1694,7 +1982,10 @@ export function createAmbientFX(canvas, options) {
     }
 
     function onVisibility() {
-        if (!document.hidden) lastTime = -1;
+        if (!document.hidden) {
+            lastTime = -1;
+            if (budget !== null) budget.reset();
+        }
     }
     document.addEventListener('visibilitychange', onVisibility);
 
@@ -1734,6 +2025,7 @@ export function createAmbientFX(canvas, options) {
     resize();
     primeSprites();
     initParticles();
+    if (budget !== null) budget.setBaseCount(cfg.count);
     if (pointerMode !== POINTER_OFF) bindPointer();
     if (opts.autoStart !== false) {
         running = true;
@@ -1807,10 +2099,24 @@ export function createAmbientFX(canvas, options) {
             if (raf !== null) { cancelAnimationFrame(raf); raf = null; }
         },
 
+        /** The active frame-budget, or null when disabled. */
+        get frameBudget() { return budget; },
+
+        /**
+         * Swap the frame-budget policy live. Pass `null`/`false` to disable,
+         * `true` to enable with defaults, or a fresh FrameBudgetOptions object.
+         */
+        setFrameBudget(spec) {
+            if (destroyed) return;
+            budget = _resolveFrameBudget(spec);
+            if (budget !== null) budget.setBaseCount(cfg.count);
+        },
+
         resume() {
             if (running || destroyed) return;
             running = true;
             lastTime = -1;
+            if (budget !== null) budget.reset();
             raf = requestAnimationFrame(loop);
         },
 
