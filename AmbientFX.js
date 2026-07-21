@@ -14,7 +14,7 @@
  * (c) 2026 Zahary Shinikchiev. MIT.
  */
 
-export const VERSION = '1.4.0';
+export const VERSION = '1.4.1';
 
 // ============================================================
 //  THEME PRESETS
@@ -345,6 +345,11 @@ const FALL_DRIFT_SPEED_VAR = 2.5;
 const FALL_SPAWN_DRIFT = 120;         // widen the spawn band into the wind
 const FALL_CULL_X = 120;              // horizontal cull margin
 const FALL_SIZE_JITTER = 0.4;
+// Fade-in length, in 60fps frames. Previously the window was a fixed slice of
+// `life` (< 0.1), which made its duration 0.1/decay frames -- 14 for Meteor
+// but 167 for Snow, purely as a side effect of a `decay` most FALL themes
+// never reach because geometry culls them first.
+const FALL_FADE_IN_FRAMES = 12;
 
 // ---- v1.2.0: parallax depth bands ----
 // Discrete z layers instead of a uniform ramp. Same trichotomy lite-snow and
@@ -377,6 +382,7 @@ const POINTER_DEFAULT_STRENGTH = 8;
 const EMBER_FADE_IN_INV = 5;      // 1 / 0.2
 const EMBER_FADE_OUT_INV = 1.25;  // 1 / 0.8
 const FLOAT_FADE_INV = 10;        // 1 / 0.1
+const FLOAT_SWAY_AMP = 0.5;       // px per 60fps frame of horizontal sway
 
 // ============================================================
 //  DPR-AWARE SPRITE CACHE (nested Map, zero string allocation)
@@ -386,6 +392,46 @@ const FLOAT_FADE_INV = 10;        // 1 / 0.1
 // the `${color}:${physical}` string concatenation that would otherwise burn
 // one string allocation per lookup.
 const _sprites = new Map();
+
+// Live-holder refcount, keyed by color. A rasterized sprite is reachable from
+// every particle that spawned with it (`p.spriteCanvas`), so dropping one is
+// not a cache eviction -- it zeroes a canvas another instance is still
+// blitting, and per the HTML spec `drawImage()` on a zero-dimension canvas
+// throws InvalidStateError. Colors are therefore retained per instance and
+// only freed once the last holder releases them.
+const _spriteRefs = new Map();
+
+/** Register `colors` as owned by one more instance. */
+function _retainColors(colors) {
+    for (let i = 0; i < colors.length; i++) {
+        const color = colors[i];
+        const n = _spriteRefs.get(color);
+        _spriteRefs.set(color, n === undefined ? 1 : n + 1);
+    }
+}
+
+/** Drop a color's rasterized canvases and free their backing stores. */
+function _evictColor(color) {
+    const byPhysical = _sprites.get(color);
+    if (byPhysical === undefined) return;
+    for (const c of byPhysical.values()) {
+        c.width = 0;
+        c.height = 0;
+    }
+    _sprites.delete(color);
+}
+
+/** Release one instance's claim; evict only when the count reaches zero. */
+function _releaseColors(colors) {
+    for (let i = 0; i < colors.length; i++) {
+        const color = colors[i];
+        const n = _spriteRefs.get(color);
+        if (n === undefined) continue;
+        if (n > 1) { _spriteRefs.set(color, n - 1); continue; }
+        _spriteRefs.delete(color);
+        _evictColor(color);
+    }
+}
 
 /**
  * Get or build a sprite. `logicalSize` is what the caller draws at; we
@@ -431,25 +477,16 @@ function getSprite(color, logicalSize, dpr) {
  * omitted). Called on updateConfig({colors|spark}) and on destroy().
  */
 export function clearAmbientSpriteCache(colors) {
-    if (!colors) {
-        for (const byPhysical of _sprites.values()) {
-            for (const c of byPhysical.values()) {
-                c.width = 0;
-                c.height = 0;
-            }
-        }
-        _sprites.clear();
-        return;
-    }
-    for (let i = 0; i < colors.length; i++) {
-        const color = colors[i];
-        const byPhysical = _sprites.get(color);
-        if (byPhysical === undefined) continue;
-        for (const c of byPhysical.values()) {
-            c.width = 0;
-            c.height = 0;
-        }
-        _sprites.delete(color);
+    // A color still claimed by a live instance is dropped from the index but
+    // its canvas is left intact -- particles holding it keep drawing until
+    // they respawn, and the next spawn re-rasterizes. That is the "one frame
+    // of re-rasterization" this function has always promised; before the
+    // refcount it actually zeroed the canvas under the live holder.
+    const keys = colors || Array.from(_sprites.keys());
+    for (let i = 0; i < keys.length; i++) {
+        const color = keys[i];
+        if (_spriteRefs.has(color)) _sprites.delete(color);
+        else _evictColor(color);
     }
 }
 
@@ -807,10 +844,16 @@ export function parseColor(input, out) {
     if (s.length !== 6) {
         throw new SyntaxError('parseColor: hex must be 3 or 6 chars: ' + input);
     }
-    const n = parseInt(s, 16);
-    if (n !== n) { // NaN check without extra call
-        throw new SyntaxError('parseColor: invalid hex: ' + input);
+    // parseInt() prefix-parses -- '12zzzz' yields 0x12, not NaN -- so the old
+    // NaN check let malformed input through as a plausible wrong color.
+    // Validate every digit instead. Zero allocation.
+    for (let i = 0; i < 6; i++) {
+        const cc = s.charCodeAt(i);
+        if (!((cc >= 48 && cc <= 57) || (cc >= 97 && cc <= 102) || (cc >= 65 && cc <= 70))) {
+            throw new SyntaxError('parseColor: invalid hex: ' + input);
+        }
     }
+    const n = parseInt(s, 16);
     const r = _srgbToLinear(((n >> 16) & 0xff) * INV_255);
     const g = _srgbToLinear(((n >>  8) & 0xff) * INV_255);
     const b = _srgbToLinear(( n        & 0xff) * INV_255);
@@ -1347,6 +1390,12 @@ BEHAVIORS.EMBER = {
         const turbFactor = cfg.turbulence;
         const ds = frame.ds;
         const respawn = frame.respawn;
+        // decay 0 means "no lifecycle": life never advances, so the envelope
+        // has nothing to progress through. Collapse it to a flat maxAlpha
+        // rather than leaving every particle pinned at the life-0 alpha of 0.
+        // Hoisted; the loop body keeps its original instruction count.
+        const fadeInSpan = cfg.decay > 0 ? 0.2 : 0;
+        const fadeOutInv = cfg.decay > 0 ? EMBER_FADE_OUT_INV : 1;
         for (let i = 0; i < particles.length; i++) {
             const p = particles[i];
             const turbIdx = (p.y * 0.5) | 0;
@@ -1356,10 +1405,14 @@ BEHAVIORS.EMBER = {
             p.y -= moveY;
             p.x += moveX;
             p.life += p.decay * ds;
-            let alpha;
-            if (p.life < 0.2) alpha = p.life * EMBER_FADE_IN_INV * p.maxAlpha;
-            else alpha = EMBER_FADE_OUT_INV * (1 - p.life) * p.maxAlpha;
-            if (p.y < -RESPAWN_MARGIN_Y || alpha <= 0) { respawn(p, false); continue; }
+            // Death is a life test, not an alpha test. `alpha <= 0` was also
+            // true at life 0 and whenever maxAlpha was 0, so a config with
+            // decay: 0 or alpha: 0 -- both of which validateConfig accepts --
+            // respawned every particle on every frame and rendered nothing.
+            if (p.y < -RESPAWN_MARGIN_Y || p.life >= 1) { respawn(p, false); continue; }
+            const alpha = p.life < fadeInSpan
+                ? p.life * EMBER_FADE_IN_INV * p.maxAlpha
+                : fadeOutInv * (1 - p.life) * p.maxAlpha;
             if (alpha > ALPHA_EPSILON) {
                 const a = alpha > 1 ? 1 : alpha;
                 ctx.globalAlpha = a;
@@ -1481,16 +1534,22 @@ BEHAVIORS.FLOAT = {
         const wind = cfg.wind;
         const ds = frame.ds;
         const respawn = frame.respawn;
+        // See EMBER: decay 0 has no lifecycle, so both fade windows close.
+        const fadeInSpan = cfg.decay > 0 ? 0.1 : 0;
+        const fadeOutStart = cfg.decay > 0 ? 0.9 : 1;
         for (let i = 0; i < particles.length; i++) {
             const p = particles[i];
             const moveY = (p.vy + wind.y) * p.z * ds;
             p.y -= moveY;
-            p.x += Math.sin(p.y * 0.05) * 0.5;
+            // `* ds` was missing: sway advanced once per frame rather than per
+            // unit of frame time, so at 120fps FLOAT drifted sideways twice as
+            // far per second as at 60. Every other term here is already scaled.
+            p.x += Math.sin(p.y * 0.05) * FLOAT_SWAY_AMP * ds;
             p.life += p.decay * ds;
             if (p.y < -RESPAWN_MARGIN_Y || p.life >= 1) { respawn(p, false); continue; }
             let alpha;
-            if (p.life < 0.1) alpha = p.life * FLOAT_FADE_INV * p.maxAlpha;
-            else if (p.life > 0.9) alpha = (1 - p.life) * FLOAT_FADE_INV * p.maxAlpha;
+            if (p.life < fadeInSpan) alpha = p.life * FLOAT_FADE_INV * p.maxAlpha;
+            else if (p.life > fadeOutStart) alpha = (1 - p.life) * FLOAT_FADE_INV * p.maxAlpha;
             else alpha = p.maxAlpha;
             if (alpha > ALPHA_EPSILON) {
                 const a = alpha > 1 ? 1 : alpha;
@@ -1643,6 +1702,12 @@ BEHAVIORS.FALL = {
         const stretch = cfg.stretch === undefined ? 0 : cfg.stretch;
         const cullBottom = H + RESPAWN_MARGIN_Y;
         const cullRight = W + FALL_CULL_X;
+        // Hoisted: the fade-in window costs nothing per particle. Capped at the
+        // original 0.1 so nothing fades in slower than it used to. decay 0
+        // yields a span of 0, i.e. full alpha immediately.
+        const fadeSpanRaw = FALL_FADE_IN_FRAMES * cfg.decay;
+        const fadeSpan = fadeSpanRaw > 0.1 ? 0.1 : fadeSpanRaw;
+        const fadeInv = fadeSpan > 0 ? 1 / fadeSpan : 0;
 
         for (let i = 0; i < particles.length; i++) {
             const p = particles[i];
@@ -1662,8 +1727,8 @@ BEHAVIORS.FALL = {
                 continue;
             }
 
-            const alpha = p.life < 0.1
-                ? p.life * FLOAT_FADE_INV * p.maxAlpha
+            const alpha = p.life < fadeSpan
+                ? p.life * fadeInv * p.maxAlpha
                 : p.maxAlpha;
 
             if (alpha > ALPHA_EPSILON) {
@@ -1729,15 +1794,29 @@ export function createAmbientFX(canvas, options) {
     let cfg = isReduced ? degradeForReducedMotion(baseCfg) : baseCfg;
     let currentThemeName = themeName;
 
+    // Palette this instance currently claims in the shared sprite cache.
+    let ownedColors = null;
+
+    /**
+     * Claim the current palette and drop the previous one. Retain runs first
+     * so a color carried across the change never transiently hits zero and
+     * gets evicted out from under our own live particles.
+     */
+    function retainPalette() {
+        const next = uniqueColors(cfg);
+        _retainColors(next);
+        if (ownedColors !== null) _releaseColors(ownedColors);
+        ownedColors = next;
+    }
+
     /** Re-derive `cfg` from `baseCfg` + the current reduced-motion state. */
     function applyCfg(nextBase, refreshSprites) {
-        const prevColors = uniqueColors(cfg);
         baseCfg = nextBase;
         cfg = isReduced ? degradeForReducedMotion(baseCfg) : baseCfg;
-        if (refreshSprites) {
-            clearAmbientSpriteCache(prevColors);
-            primeSprites();
-        }
+        retainPalette();
+        if (refreshSprites) primeSprites();
+        // Respawns every particle, so each picks up a sprite from the live
+        // cache rather than keeping a reference we may have just released.
         initParticles();
         if (budget !== null) budget.setBaseCount(cfg.count);
     }
@@ -1752,7 +1831,11 @@ export function createAmbientFX(canvas, options) {
             frame.H = H;
             frame.isInit = false;
             while (particles.length < next) {
-                const p = makeParticle();
+                // `id` feeds CHAOS's `(phase + p.id) & 1` flicker; an
+                // undefined id makes that NaN & 1 === 0, so budget-restored
+                // particles never flicker bright. It also breaks the Smi field
+                // representation the pool depends on being monomorphic.
+                const p = makeParticle(particles.length);
                 particles.push(p);
                 behavior.spawn(p, frame);
             }
@@ -1911,8 +1994,17 @@ export function createAmbientFX(canvas, options) {
     }
 
     function onPointerMove(e) {
-        pointerX = e.clientX - rectLeft;
-        pointerY = e.clientY - rectTop;
+        const px = e.clientX - rectLeft;
+        const py = e.clientY - rectTop;
+        // A synthetic `new Event('pointermove')` carries no clientX, and
+        // `undefined - 0` is NaN. Letting that reach applyPointer poisons the
+        // field permanently: `d2 = NaN` fails both the `>= r2` and the `< 1`
+        // guard, so every particle integrates NaN, and once a position is NaN
+        // no cull test can ever be true again. The whole field collapses onto
+        // the origin for the life of the instance. Two compares per event.
+        if (px !== px || py !== py) return;
+        pointerX = px;
+        pointerY = py;
         pointerActive = true;
     }
 
@@ -2009,11 +2101,16 @@ export function createAmbientFX(canvas, options) {
 
     let ro = null;
     let resizeScheduled = false;
+    // Tracked so destroy() can cancel it. A hidden tab never fires rAF, so an
+    // uncancelled debounce pins this closure -- and through it the instance
+    // and its canvas -- for as long as the tab stays backgrounded.
+    let resizeRaf = null;
     if (typeof ResizeObserver !== 'undefined') {
         ro = new ResizeObserver(() => {
             if (resizeScheduled || destroyed) return;
             resizeScheduled = true;
-            requestAnimationFrame(() => {
+            resizeRaf = requestAnimationFrame(() => {
+                resizeRaf = null;
                 resizeScheduled = false;
                 if (!destroyed) resize();
             });
@@ -2022,6 +2119,7 @@ export function createAmbientFX(canvas, options) {
     }
 
     // Boot.
+    retainPalette();
     resize();
     primeSprites();
     initParticles();
@@ -2135,8 +2233,8 @@ export function createAmbientFX(canvas, options) {
                 }
             }
             if (ro !== null) { ro.disconnect(); ro = null; }
-            const palette = uniqueColors(cfg);
-            clearAmbientSpriteCache(palette);
+            if (resizeRaf !== null) { cancelAnimationFrame(resizeRaf); resizeRaf = null; }
+            if (ownedColors !== null) { _releaseColors(ownedColors); ownedColors = null; }
             particles.length = 0;
         },
     };

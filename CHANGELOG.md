@@ -5,6 +5,103 @@ All notable changes to `@zakkster/lite-ambient-fx` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1] -- 2026-07-22
+
+Correctness pass. Seven defects, all found by adversarial torture testing under
+`@zakkster/lite-gc-profiler` and `@zakkster/lite-leak`. No API changes.
+
+### Fixed
+
+- **Shared sprite cache no longer torn out from under live instances.** The
+  module-level sprite cache is shared by every instance, but `destroy()` and
+  `setTheme()`/`updateConfig()` called `clearAmbientSpriteCache(palette)`,
+  which zeroes `width`/`height` on canvases that *other* instances' particles
+  still reference through `p.spriteCanvas`. Per the HTML spec, `drawImage()`
+  on a zero-dimension `HTMLCanvasElement` throws `InvalidStateError`, so a
+  surviving sibling threw once per frame for the rest of its life. Measured on
+  1.4.0: destroying one of two same-theme instances corrupted 1195/1199 of the
+  survivor's blits; a `setTheme()` on one of two corrupted 1200/1200.
+
+  Colors are now reference-counted per instance (`_retainColors` /
+  `_releaseColors`); a canvas is freed only when its last holder releases it.
+  As a side effect the `lerpTheme` sprite-cache growth described in the
+  `lerpTheme` docblock is now self-cleaning -- intermediate hex colors are
+  released as the sweep advances.
+
+- **`clearAmbientSpriteCache()` is now safe to call while instances are live.**
+  It drops still-claimed colors from the index without zeroing their canvases,
+  so live particles keep rendering and the next spawn re-rasterizes. This is
+  the "one frame of re-rasterization" the docs always promised; previously it
+  permanently blanked every live instance.
+
+- **A pointer event with no `clientX` no longer destroys the field.** A bare
+  `dispatchEvent(new Event('pointermove'))` -- routine from synthetic input and
+  third-party code -- gave `pointerX = undefined - rectLeft`, i.e. `NaN`. In
+  `applyPointer`, `d2 = NaN` fails both the `>= r2` and `< 1` guards, so every
+  particle integrated `NaN`; once a position is `NaN` no cull test can ever be
+  true again and the entire field collapses onto the origin permanently.
+  `onPointerMove` now rejects non-finite coordinates. Two compares per event;
+  no hot-path cost.
+
+- **Frame-budget pool growth assigns particle ids.** `adjustCount()` called
+  `makeParticle()` with no argument, so every particle added by a budget
+  restore carried `id: undefined`. CHAOS computes `(phase + p.id) & 1`, and
+  `NaN & 1` is `0`, so those particles never entered the bright flicker state.
+  It also broke the Smi field representation the pool documents as monomorphic.
+
+- **FLOAT horizontal sway is delta-scaled.** `p.x += Math.sin(p.y * 0.05) * 0.5`
+  omitted the `* ds` every other term carries, so sway advanced per *frame*
+  rather than per unit of frame time. Over equal wall time, 120fps drifted
+  1.98x further than 60fps. Now framerate-independent; identical at 60fps.
+
+- **`decay: 0` renders instead of spinning.** `validateConfig` accepts `0` as a
+  finite non-negative number, but EMBER's death test was `alpha <= 0`, which is
+  also true at `life === 0` and whenever `maxAlpha` is `0`. The result was
+  every particle respawning on every frame, forever, drawing nothing. The test
+  is now `p.life >= 1`, and EMBER/FLOAT hoist their envelope terms so a config
+  with no lifecycle collapses to a flat `maxAlpha`. Hoisted, so the loop bodies
+  keep their original instruction count.
+
+- **`parseColor()` rejects malformed hex.** `parseInt` prefix-parses, so
+  `'12zzzz'` yielded `0x12` rather than `NaN` and the old `n !== n` guard never
+  fired. `#12zzzz`, `#ff00gg`, `#0x1234` and `#1e+5ab` all parsed to plausible
+  wrong colors. Every digit is now validated with a zero-allocation charCode
+  loop.
+
+- **`destroy()` cancels a debounced resize still in flight.** The
+  `ResizeObserver` handler scheduled a `requestAnimationFrame` whose id was
+  never retained. The callback no-ops on `destroyed`, but a backgrounded tab
+  never fires rAF at all, so the closure pinned the instance and its canvas for
+  as long as the tab stayed hidden.
+
+### Changed
+
+- **FALL fade-in no longer scales with `decay`.** The fade window was a fixed
+  slice of `life` (`< 0.1`), which made its *duration* `0.1 / decay` frames --
+  14 for Meteor but 167 (2.8s) for Snow, purely as a side effect of a `decay`
+  most FALL themes never reach because geometry culls them first. Capped at
+  `FALL_FADE_IN_FRAMES` (12) so every FALL theme fades in over the same wall
+  time. This is the only visible change in this release: Snow and Sakura reach
+  full opacity noticeably sooner after mount and after each respawn. The window
+  is still capped at the original `0.1`, so nothing fades in *slower* than
+  before.
+
+### Testing
+
+- **`test/11-torture_test.mjs`** -- new. 29 adversarial cases: multi-instance
+  sprite ownership, interleaved mount/destroy under five rotating themes,
+  malformed pointer input, frame-budget pool growth, framerate independence,
+  degenerate-but-legal configs, `parseColor` validation, 100-cycle lifecycle
+  audit under lite-leak's timer/listener/observer kernels, and per-behavior
+  zero-alloc gates via lite-gc-profiler's `measureOps`/`checkOps` lane.
+  17 of the 29 fail against 1.4.0.
+
+- Fixed a pre-existing ~18% flake in
+  `02-runtime > FALL behavior > Snow and Rain both mount and render through
+  FALL`. Snow reached only 2% of its field drawn by frame 3, so the assertion
+  landed on the wrong side of `ALPHA_EPSILON` at random. The FALL fade-in
+  change removes the cause; 60 consecutive runs now pass.
+
 ## [1.4.0] -- 2026-07-21
 
 Runtime hardening: frame-budget auto-degrade + six new atmospheres.
