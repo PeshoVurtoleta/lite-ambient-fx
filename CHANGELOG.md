@@ -5,6 +5,95 @@ All notable changes to `@zakkster/lite-ambient-fx` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v1.3.0
+
+Color pipeline pass. Identity constraint preserved: one file, zero dependencies.
+OKLCH math is vendored inline (Björn Ottosson's matrices) — no import from
+`@zakkster/lite-hueforge` or `@zakkster/lite-color-lerp`. Those packages remain
+tree-shakeable neighbors, not runtime deps of the core file.
+
+### Added
+
+- **`parseColor(input, out?)`** — accepts `#rgb`, `#rrggbb`, or `oklch(L C H)`
+  (with `%` on L, comma / slash separators, alpha ignored). Writes into `out`
+  when supplied; otherwise allocates a `Float64Array(3)`. Aliased as
+  `oklchFromHex`.
+
+- **`formatColor(L, C, H)`** — gamut-clamped `#rrggbb`. One string allocation
+  per call. Aliased as `hexFromOklch`.
+
+- **`lerpOklch(a, b, t, out)`** — element-wise OKLCH interpolation with
+  shortest-arc hue. Zero-alloc; returns `out`.
+
+- **`colorsFromPalette(stops, opts?)`** — normalize a palette specification
+  into `AmbientConfig.colors`-shaped hex[]. Duck-typed input: `string`,
+  `{l, c, h}` (hueforge `ScaleStep` shape), `{L, C, H}`, `{offset, l, c, h}`,
+  `{color}` wrapper, and `[position, colorOrObj]` CSS-style tuples. Optional
+  `count` resamples the stops.
+
+  ```js
+  import { createScale } from '@zakkster/lite-hueforge';
+  const primary = createScale({ name: 'P', base: {l: 0.55, c: 0.22, h: 268}, curve: 'ease-in-out-quad' });
+  fx.updateConfig({ colors: colorsFromPalette(primary.steps()) });
+  ```
+
+- **`lerpTheme(a, b, t, out?)`** — interpolate two `AmbientConfig`s. Colors
+  lerp channel-wise in OKLCH; scalars linearly; `wind` as a vector; discrete
+  fields (`behavior`, `depthBands`, `stretch`) step at `t = 0.5`. When `out`
+  is supplied, its `colors` array and `wind` object are reused — safe for a
+  10 Hz driver.
+
+  ```js
+  const scratch = { colors: [], wind: { x: 0, y: 0 } };
+  effect(() => {
+    fx.updateConfig(lerpTheme(THEMES.Night, THEMES.Fire, dayCycle(), scratch));
+  });
+  ```
+
+### Design notes
+
+- **Why vendor OKLCH.** Two matrices, ~40 lines total. The "one file, zero
+  dep" badge is the pitch against tsparticles; letting a Fire ↔ Frost demo
+  drag in a color package would erode the moat. Confetti (its own release)
+  rebases on `lite-particles` because a shared SoA layer wins there;
+  ambient-fx vendors because standalone is the moat here.
+
+- **Why 8-bit hex, not `oklch()` output strings.** Sprite cache is keyed
+  by color string. Hex is the natural quantization step — same OKLCH
+  triple → same hex → same cached sprite.
+
+- **Sprite cache under long transitions.** For a wide OKLCH sweep at 60 Hz
+  over 10 s the cache can grow to ≈ 400 unique hex per palette slot. At
+  10 Hz over 5 s it's ≈ 50 per slot — the intended workload and no cleanup
+  required. `clearAmbientSpriteCache()` is available for post-transition
+  reclamation if needed.
+
+- **Behavior transitions.** `lerpTheme` on `EMBER → MIST` steps at `t = 0.5`
+  rather than blending — MIST at half-EMBER speed with EMBER's sprite size is
+  not a rendering worth defining. Same-behavior transitions are the smooth
+  case, and are the recommended pattern.
+
+### Package-specific gates (green)
+
+- 40-test v1.3.0 suite in `test/04-color-pipeline_test.mjs`.
+- Round-trip: `hex → OKLCH → hex` byte-identical for the shipped palettes.
+- Endpoint invariant: `lerpTheme(a, b, 0)` and `lerpTheme(a, b, 1)` scalars
+  match `a` and `b` exactly.
+- Determinism: same `(a, b, t)` triple → byte-identical colors, spark, wind.
+- Scratch reuse: `colors` array and `wind` object are the same reference
+  across successive `lerpTheme` calls.
+- Every intermediate `lerpTheme` output passes `validateConfig`.
+- Hueforge `ScaleStep` shape (`{step, l, c, h}`) plugs into
+  `colorsFromPalette` without adaptation.
+
+### Not in this release
+
+- No `lite-hueforge` runtime import — deferred indefinitely, see design note.
+- No CSS Color 4 chroma-direction gamut mapping — the extra 30 lines don't
+  pay their way for a sprite-blurred particle.
+- No `oklch()` output format — see design note above.
+- Web Worker / OffscreenCanvas mode — deferred to v1.4.0 (per roadmap).
+
 ## [1.2.0] — 2026-07-14
 
 ### Added

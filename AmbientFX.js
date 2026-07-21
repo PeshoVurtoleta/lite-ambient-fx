@@ -14,7 +14,7 @@
  * (c) 2026 Zahary Shinikchiev. MIT.
  */
 
-export const VERSION = '1.2.0';
+export const VERSION = '1.3.0';
 
 // ============================================================
 //  THEME PRESETS
@@ -592,6 +592,414 @@ function makeParticle(id) {
         driftPhase: 0, driftSpeed: 0, driftAmp: 0,
     };
 }
+
+// =============================================================================
+// Section  1  OKLCH <-> sRGB math (Bjoern Ottosson, public domain)
+//
+// Matrices split as scalar consts so V8 keeps them monomorphic and the JIT can
+// hoist them out of any inner loop we later add. No array literals on the hot
+// path.
+// =============================================================================
+
+// Scratch triples. Reused across every parse / lerp / format call so a 10 Hz
+// updateConfig loop against lerpTheme allocates nothing per tick beyond the
+// output hex strings (which are unavoidable -- strings are immutable).
+const _oklchA   = new Float64Array(3);
+const _oklchB   = new Float64Array(3);
+const _oklchOut = new Float64Array(3);
+
+// linear-sRGB -> LMS
+const M1_00 = 0.4122214708, M1_01 = 0.5363325363, M1_02 = 0.0514459929;
+const M1_10 = 0.2119034982, M1_11 = 0.6806995451, M1_12 = 0.1073969566;
+const M1_20 = 0.0883024619, M1_21 = 0.2817188376, M1_22 = 0.6299787005;
+
+// LMS' -> OKLab
+const M2_00 = 0.2104542553, M2_01 =  0.7936177850, M2_02 = -0.0040720468;
+const M2_10 = 1.9779984951, M2_11 = -2.4285922050, M2_12 =  0.4505937099;
+const M2_20 = 0.0259040371, M2_21 =  0.7827717662, M2_22 = -0.8086757660;
+
+// OKLab -> LMS' (inverse of M2)
+const IM2_01 =  0.3963377774, IM2_02 =  0.2158037573;
+const IM2_11 = -0.1055613458, IM2_12 = -0.0638541728;
+const IM2_21 = -0.0894841775, IM2_22 = -1.2914855480;
+
+// LMS -> linear-sRGB (inverse of M1)
+const IM1_00 =  4.0767416621, IM1_01 = -3.3077115913, IM1_02 =  0.2309699292;
+const IM1_10 = -1.2684380046, IM1_11 =  2.6097574011, IM1_12 = -0.3413193965;
+const IM1_20 = -0.0041960863, IM1_21 = -0.7034186147, IM1_22 =  1.7076147010;
+
+// DEG_TO_RAD comes from the module-level constants block above.
+const RAD_TO_DEG = 180 / Math.PI;
+const INV_2P4 = 1 / 2.4;
+const INV_255 = 1 / 255;
+
+function _srgbToLinear(u) {
+    return u <= 0.04045
+        ? u * (1 / 12.92)
+        : Math.pow((u + 0.055) * (1 / 1.055), 2.4);
+}
+
+function _linearToSrgb(u) {
+    return u <= 0.0031308
+        ? u * 12.92
+        : 1.055 * Math.pow(u, INV_2P4) - 0.055;
+}
+
+// =============================================================================
+// Section  2  parseColor / formatColor -- public helpers
+// =============================================================================
+
+/**
+ * Parse a color string into an OKLCH triple `[L, C, H]`.
+ *
+ * Accepts `#rgb`, `#rrggbb`, `rgb`, `rrggbb`, or `oklch(L C H)` / `oklch(L% C H)`.
+ * Returns `out` if supplied (zero-alloc); otherwise allocates a Float64Array(3).
+ *
+ * Throws on unrecognized input. Does NOT clamp -- the returned OKLCH may lie
+ * outside the sRGB gamut when parsed from a CSS oklch() literal.
+ *
+ * @param {string} input
+ * @param {Float64Array=} out
+ * @returns {Float64Array}
+ */
+export function parseColor(input, out) {
+    if (typeof input !== 'string') {
+        throw new TypeError('parseColor: expected string, got ' + typeof input);
+    }
+    const target = out !== undefined ? out : new Float64Array(3);
+
+    // oklch(...) -- accept both space and comma separators, and % on L.
+    if (input.length > 6 && input.charCodeAt(0) === 111 /* 'o' */) {
+        const open = input.indexOf('(');
+        const close = input.indexOf(')');
+        if (open < 0 || close < 0) {
+            throw new SyntaxError('parseColor: malformed oklch() literal: ' + input);
+        }
+        const body = input.slice(open + 1, close);
+        // Split on ' ' / ',' / '/' (alpha ignored)
+        const parts = body.replace(/\//g, ' ').split(/[\s,]+/).filter(Boolean);
+        if (parts.length < 3) {
+            throw new SyntaxError('parseColor: oklch() needs 3 components: ' + input);
+        }
+        let L = parseFloat(parts[0]);
+        if (parts[0].charCodeAt(parts[0].length - 1) === 37 /* '%' */) L *= 0.01;
+        target[0] = L;
+        target[1] = parseFloat(parts[1]);
+        target[2] = parseFloat(parts[2]);
+        return target;
+    }
+
+    // hex path -- strip leading '#'
+    let s = input.charCodeAt(0) === 35 /* '#' */ ? input.slice(1) : input;
+    if (s.length === 3) {
+        // #rgb -> #rrggbb via char duplication (no alloc via template literal
+        // here -- string concat is fine, this path is warm-not-hot)
+        s = s[0] + s[0] + s[1] + s[1] + s[2] + s[2];
+    }
+    if (s.length !== 6) {
+        throw new SyntaxError('parseColor: hex must be 3 or 6 chars: ' + input);
+    }
+    const n = parseInt(s, 16);
+    if (n !== n) { // NaN check without extra call
+        throw new SyntaxError('parseColor: invalid hex: ' + input);
+    }
+    const r = _srgbToLinear(((n >> 16) & 0xff) * INV_255);
+    const g = _srgbToLinear(((n >>  8) & 0xff) * INV_255);
+    const b = _srgbToLinear(( n        & 0xff) * INV_255);
+
+    const l_ = M1_00 * r + M1_01 * g + M1_02 * b;
+    const m_ = M1_10 * r + M1_11 * g + M1_12 * b;
+    const s_ = M1_20 * r + M1_21 * g + M1_22 * b;
+
+    const lC = Math.cbrt(l_);
+    const mC = Math.cbrt(m_);
+    const sC = Math.cbrt(s_);
+
+    const L = M2_00 * lC + M2_01 * mC + M2_02 * sC;
+    const a = M2_10 * lC + M2_11 * mC + M2_12 * sC;
+    const bLab = M2_20 * lC + M2_21 * mC + M2_22 * sC;
+
+    target[0] = L;
+    target[1] = Math.hypot(a, bLab);
+    let h = Math.atan2(bLab, a) * RAD_TO_DEG;
+    if (h < 0) h += 360;
+    target[2] = h;
+    return target;
+}
+
+// Alias with a clearer name at call sites that only take hex.
+export const oklchFromHex = parseColor;
+
+/**
+ * Format an OKLCH triple as `#rrggbb`, gamut-clamped in linear sRGB.
+ *
+ * Uses the natural 8-bit quantization of the hex format as a sprite-cache
+ * bound: an OKLCH lerp trajectory that would otherwise generate thousands of
+ * near-identical intermediate stops collapses to O(dozens) of hex strings.
+ *
+ * @param {number} L  Lightness   [0..1] (values outside are clamped after conversion)
+ * @param {number} C  Chroma      typically [0..0.4]
+ * @param {number} H  Hue in deg  [0..360)
+ * @returns {string}
+ */
+export function formatColor(L, C, H) {
+    const hRad = H * DEG_TO_RAD;
+    const a = C * Math.cos(hRad);
+    const b = C * Math.sin(hRad);
+
+    const l_ = L + IM2_01 * a + IM2_02 * b;
+    const m_ = L + IM2_11 * a + IM2_12 * b;
+    const s_ = L + IM2_21 * a + IM2_22 * b;
+
+    const lc = l_ * l_ * l_;
+    const mc = m_ * m_ * m_;
+    const sc = s_ * s_ * s_;
+
+    let r = IM1_00 * lc + IM1_01 * mc + IM1_02 * sc;
+    let g = IM1_10 * lc + IM1_11 * mc + IM1_12 * sc;
+    let bB = IM1_20 * lc + IM1_21 * mc + IM1_22 * sc;
+
+    r = _linearToSrgb(r);
+    g = _linearToSrgb(g);
+    bB = _linearToSrgb(bB);
+
+    // Channel-independent clamp. Hueforge does chroma-direction gamut mapping;
+    // ambient-fx doesn't need that fidelity -- a particle sprite blurs the
+    // boundary anyway and the extra math would bloat this file.
+    if (r < 0) r = 0; else if (r > 1) r = 1;
+    if (g < 0) g = 0; else if (g > 1) g = 1;
+    if (bB < 0) bB = 0; else if (bB > 1) bB = 1;
+
+    const rI = (r * 255 + 0.5) | 0;
+    const gI = (g * 255 + 0.5) | 0;
+    const bI = (bB * 255 + 0.5) | 0;
+
+    // One (r << 16) | (g << 8) | b integer -> 6-char hex via toString(16).
+    // Single string allocation per call. That's the concession.
+    const packed = (rI << 16) | (gI << 8) | bI;
+    const hex = packed.toString(16);
+    // Left-pad without regex: subtract from a static prefix.
+    return '#000000'.slice(0, 7 - hex.length) + hex;
+}
+
+// Alias
+export const hexFromOklch = formatColor;
+
+
+// =============================================================================
+// Section  3  colorsFromPalette -- hueforge bridge
+//
+// Accepts anything shaped like a palette source and returns a hex[] usable
+// as `AmbientConfig.colors`. No import from hueforge -- the shape is duck-
+// typed. If hueforge later changes its scale output, this stays compatible.
+// =============================================================================
+
+/**
+ * Normalize a palette specification into `AmbientConfig.colors`-shaped hex[].
+ *
+ * Accepted item shapes (mixed within a single array is fine):
+ *   - string:                   passed through if hex or oklch(), else parsed
+ *   - `{ l, c, h }`:            OKLCH stop (hueforge ScaleStep shape)
+ *   - `{ color: string }`:      { color } wrapper (hueforge token export)
+ *   - `[position, colorOrObj]`: CSS-style stop tuple, position ignored
+ *   - `{ offset, l, c, h }`:    positioned stop, offset ignored
+ *
+ * A count option evenly samples the input if provided; otherwise every stop
+ * is emitted.
+ *
+ * @example  Direct from a hueforge scale
+ *   const primary = createScale({ ... });
+ *   fx.updateConfig({ colors: colorsFromPalette(primary.steps()) });
+ *
+ * @example  Manual OKLCH stops
+ *   colorsFromPalette([{l: 0.7, c: 0.15, h: 30}, {l: 0.5, c: 0.2, h: 260}])
+ *   // -> ['#c88a6b', '#4e5aa8']
+ *
+ * @param {Array} stops
+ * @param {{ count?: number }=} opts
+ * @returns {string[]}
+ */
+export function colorsFromPalette(stops, opts) {
+    if (!Array.isArray(stops)) {
+        throw new TypeError('colorsFromPalette: expected an array of stops');
+    }
+    if (stops.length === 0) return [];
+
+    const wantCount = opts && typeof opts.count === 'number' && opts.count > 0
+        ? opts.count | 0
+        : stops.length;
+
+    const out = new Array(wantCount);
+    for (let i = 0; i < wantCount; i++) {
+        // Evenly sample: index in [0, stops.length - 1] mapped linearly.
+        const src = wantCount === 1
+            ? 0
+            : Math.round(i * (stops.length - 1) / (wantCount - 1));
+        out[i] = _stopToHex(stops[src]);
+    }
+    return out;
+}
+
+function _stopToHex(stop) {
+    // String -> return as-is if already a hex, else parse + reformat.
+    if (typeof stop === 'string') {
+        if (stop.charCodeAt(0) === 35 /* '#' */) return stop;
+        parseColor(stop, _oklchOut);
+        return formatColor(_oklchOut[0], _oklchOut[1], _oklchOut[2]);
+    }
+
+    // [pos, ...] tuple -> recurse on payload
+    if (Array.isArray(stop)) {
+        if (stop.length < 2) {
+            throw new TypeError('colorsFromPalette: tuple stop needs [pos, color]');
+        }
+        return _stopToHex(stop[1]);
+    }
+
+    if (stop && typeof stop === 'object') {
+        // { color: string } wrapper
+        if (typeof stop.color === 'string') return _stopToHex(stop.color);
+
+        // { l, c, h } / { L, C, H } / { offset, l, c, h } -- OKLCH triple
+        const L = stop.l !== undefined ? stop.l : stop.L;
+        const C = stop.c !== undefined ? stop.c : stop.C;
+        const H = stop.h !== undefined ? stop.h : stop.H;
+        if (typeof L === 'number' && typeof C === 'number' && typeof H === 'number') {
+            return formatColor(L, C, H);
+        }
+    }
+
+    throw new TypeError('colorsFromPalette: unrecognized stop shape: ' + JSON.stringify(stop));
+}
+
+
+// =============================================================================
+// Section  4  lerpOklch / lerpTheme -- theme interpolation
+// =============================================================================
+
+/**
+ * Interpolate two OKLCH triples into `out`. Hue takes the shortest arc.
+ * All three inputs are Float64Array-ish (any indexable [L, C, H]).
+ *
+ * @param {ArrayLike<number>} a  triple at t = 0
+ * @param {ArrayLike<number>} b  triple at t = 1
+ * @param {number}            t  [0, 1] (unclamped -- extrapolation is legal)
+ * @param {Float64Array}      out
+ * @returns {Float64Array} `out`
+ */
+export function lerpOklch(a, b, t, out) {
+    out[0] = a[0] + (b[0] - a[0]) * t;
+    out[1] = a[1] + (b[1] - a[1]) * t;
+
+    // Shortest-arc hue. Handle wrap around 0/360.
+    let ha = a[2], hb = b[2];
+    let dh = hb - ha;
+    if (dh >  180) dh -= 360;
+    if (dh < -180) dh += 360;
+    let h = ha + dh * t;
+    if (h < 0)   h += 360;
+    if (h >= 360) h -= 360;
+    out[2] = h;
+    return out;
+}
+
+/**
+ * Interpolate two full theme configs. Colors lerp channel-wise in OKLCH;
+ * scalars lerp linearly; wind lerps as a vector; discrete fields (behavior,
+ * depthBands, stretch) step at t = 0.5.
+ *
+ * When `out` is supplied, the returned object is that same reference,
+ * mutated in place (its `colors` array and `wind` object are reused). This
+ * makes it safe to call at 10 Hz from a `raf`/`effect` without churn.
+ *
+ * The output's `colors.length` matches `min(a.colors.length, b.colors.length)`.
+ * If `a` and `b` differ in behavior, the output takes `a`'s for t < 0.5 and
+ * `b`'s for t >= 0.5 -- this is intentional: EMBER<->MIST at t = 0.4 is not a
+ * meaningful thing to render, and a hard swap at the midpoint is the least
+ * jarring choice. Same-behavior transitions are the smooth case.
+ *
+ * Sprite-cache note: each call generates fresh hex strings, and each
+ * hex string that reaches the render loop becomes a sprite-cache entry.
+ * For a wide OKLCH sweep the cache can grow to hundreds of entries per
+ * palette slot over a long transition (rough guide: ~= min(unique-t-calls,
+ * gamut-span-in-8-bit-steps)). Two mitigations:
+ *
+ *   1. Drive `t` at a lower rate -- 10 Hz over a 5 s transition emits ~= 50
+ *      unique hex per slot, which is the intended use case and needs no
+ *      cleanup.
+ *   2. Call `clearAmbientSpriteCache()` after a completed transition to
+ *      reclaim the intermediate sprites; there will be one frame of
+ *      re-rasterization on the next tick.
+ *
+ * @param {AmbientConfig} a
+ * @param {AmbientConfig} b
+ * @param {number}        t   [0, 1], clamped internally
+ * @param {AmbientConfig=} out
+ * @returns {AmbientConfig}
+ */
+export function lerpTheme(a, b, t, out) {
+    if (t < 0) t = 0; else if (t > 1) t = 1;
+    const past = t >= 0.5;
+
+    // Colors: element-wise OKLCH lerp on the shorter of the two arrays.
+    const n = Math.min(a.colors.length, b.colors.length);
+    let colors;
+    if (out && Array.isArray(out.colors)) {
+        colors = out.colors;
+        if (colors.length !== n) colors.length = n;
+    } else {
+        colors = new Array(n);
+    }
+    for (let i = 0; i < n; i++) {
+        parseColor(a.colors[i], _oklchA);
+        parseColor(b.colors[i], _oklchB);
+        lerpOklch(_oklchA, _oklchB, t, _oklchOut);
+        colors[i] = formatColor(_oklchOut[0], _oklchOut[1], _oklchOut[2]);
+    }
+
+    // Spark -- single OKLCH lerp.
+    parseColor(a.spark, _oklchA);
+    parseColor(b.spark, _oklchB);
+    lerpOklch(_oklchA, _oklchB, t, _oklchOut);
+    const spark = formatColor(_oklchOut[0], _oklchOut[1], _oklchOut[2]);
+
+    // Wind: reused object if `out` supplied.
+    let wind;
+    if (out && out.wind && typeof out.wind === 'object') {
+        wind = out.wind;
+        wind.x = a.wind.x + (b.wind.x - a.wind.x) * t;
+        wind.y = a.wind.y + (b.wind.y - a.wind.y) * t;
+    } else {
+        wind = {
+            x: a.wind.x + (b.wind.x - a.wind.x) * t,
+            y: a.wind.y + (b.wind.y - a.wind.y) * t,
+        };
+    }
+
+    // Target: reuse `out` or fresh.
+    const dst = out !== undefined ? out : {};
+    dst.behavior   = past ? b.behavior : a.behavior;
+    dst.colors     = colors;
+    dst.spark      = spark;
+    dst.count      = Math.round(a.count + (b.count - a.count) * t);
+    dst.wind       = wind;
+    dst.decay      = a.decay      + (b.decay      - a.decay)      * t;
+    dst.speed      = a.speed      + (b.speed      - a.speed)      * t;
+    dst.size       = a.size       + (b.size       - a.size)       * t;
+    dst.alpha      = a.alpha      + (b.alpha      - a.alpha)      * t;
+    dst.turbulence = a.turbulence + (b.turbulence - a.turbulence) * t;
+
+    // Discrete v1.2 fields: step at midpoint. Undefined stays undefined so
+    // validateConfig doesn't reject the output.
+    const srcDiscrete = past ? b : a;
+    if (srcDiscrete.depthBands !== undefined) dst.depthBands = srcDiscrete.depthBands;
+    else delete dst.depthBands;
+    if (srcDiscrete.stretch !== undefined)    dst.stretch    = srcDiscrete.stretch;
+    else delete dst.stretch;
+
+    return dst;
+}
+
 
 // ============================================================
 //  BEHAVIOR REGISTRY

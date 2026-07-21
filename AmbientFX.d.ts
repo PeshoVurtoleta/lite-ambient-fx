@@ -286,3 +286,109 @@ export function envelopeAlpha(mode: BuiltInBehavior, life: number, maxAlpha: num
 export function createAmbientFX(canvas: HTMLCanvasElement, options?: AmbientOptions): AmbientInstance;
 
 export default createAmbientFX;
+
+
+// -----------------------------------------------------------------------------
+// v1.3.0 type additions -- append to AmbientFX.d.ts
+// -----------------------------------------------------------------------------
+
+/** An OKLCH triple as `[L, C, H]`. Emitted as `Float64Array` at runtime. */
+export type OklchTriple = ArrayLike<number> & { readonly length: 3 };
+
+/**
+ * A single palette entry accepted by {@link colorsFromPalette}.
+ * Every shape you'd get out of a hueforge scale, a token export, or a hand-
+ * written OKLCH list is covered without an import from those packages.
+ */
+export type PaletteStop =
+    | string                                          // '#rrggbb' | 'oklch(...)'
+    | { l: number; c: number; h: number }             // hueforge ScaleStep
+    | { L: number; C: number; H: number }             // uppercase alias
+    | { offset: number; l: number; c: number; h: number }
+    | { color: string }                               // token wrapper
+    | [number, string | { l: number; c: number; h: number }];
+
+export interface ColorsFromPaletteOptions {
+    /** Evenly resample the stops to this length. Defaults to `stops.length`. */
+    count?: number;
+}
+
+/**
+ * Parse a color string into an OKLCH triple `[L, C, H]`.
+ * Accepts `#rgb`, `#rrggbb`, or `oklch(L C H)` (with `%` on L, comma/slash
+ * separators, alpha component ignored).
+ *
+ * Zero-alloc when `out` is supplied; otherwise allocates a `Float64Array(3)`.
+ * Throws on malformed input.
+ */
+export function parseColor(input: string, out?: Float64Array): Float64Array;
+
+/**
+ * Alias for {@link parseColor} -- for call sites that only take hex.
+ */
+export const oklchFromHex: typeof parseColor;
+
+/**
+ * Format an OKLCH triple as `#rrggbb`, gamut-clamped in linear sRGB.
+ * Single string allocation per call.
+ */
+export function formatColor(L: number, C: number, H: number): string;
+
+/**
+ * Alias for {@link formatColor}.
+ */
+export const hexFromOklch: typeof formatColor;
+
+/**
+ * Interpolate two OKLCH triples into `out`. Hue takes the shortest arc.
+ * Zero-alloc when `out` is supplied.
+ */
+export function lerpOklch<T extends { [i: number]: number; length: number }>(
+    a: ArrayLike<number>,
+    b: ArrayLike<number>,
+    t: number,
+    out: T,
+): T;
+
+/**
+ * Normalize a palette specification into a hex[] usable as
+ * `AmbientConfig.colors`.
+ *
+ * Shape is duck-typed -- no import from `@zakkster/lite-hueforge` is required,
+ * but hueforge's `scale.steps()` output plugs in unchanged:
+ *
+ * ```ts
+ * const primary = createScale({ ... });
+ * fx.updateConfig({ colors: colorsFromPalette(primary.steps()) });
+ * ```
+ */
+export function colorsFromPalette(
+    stops: readonly PaletteStop[],
+    opts?: ColorsFromPaletteOptions,
+): string[];
+
+/**
+ * Interpolate two full theme configs.
+ *
+ * Colors lerp channel-wise in OKLCH; scalars lerp linearly; `wind` lerps as
+ * a vector; discrete fields (`behavior`, `depthBands`, `stretch`) step at
+ * `t = 0.5`.
+ *
+ * When `out` is supplied, that reference is returned mutated in place -- its
+ * `colors` array and `wind` object are reused. Safe to call at 10 Hz from a
+ * `raf`/`effect` without allocation churn beyond the hex strings themselves.
+ *
+ * ```ts
+ * const scratch = { colors: [], wind: { x: 0, y: 0 } } as any;
+ * effect(() => {
+ *   const t = dayCycle();                 // signal in [0, 1]
+ *   fx.updateConfig(lerpTheme(THEMES.Night, THEMES.Fire, t, scratch));
+ * });
+ * ```
+ */
+export function lerpTheme<T extends AmbientConfig>(
+    a: AmbientConfig,
+    b: AmbientConfig,
+    t: number,
+    out?: T,
+): T;
