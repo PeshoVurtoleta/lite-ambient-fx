@@ -15,7 +15,8 @@ export type BuiltInTheme =
     | 'Fire' | 'Night' | 'Ice' | 'Frost' | 'Toxic' | 'Void'
     | 'Dust' | 'Aurora' | 'Abyss'
     | 'Snow' | 'Rain'
-    | 'Sakura' | 'Fireflies' | 'Meteor' | 'Cosmic' | 'Sandstorm' | 'Bioluminescence';
+    | 'Sakura' | 'Fireflies' | 'Meteor' | 'Cosmic' | 'Sandstorm' | 'Bioluminescence'
+    | 'MoltenGold' | 'ShadowWisp' | 'Stardust' | 'NeonGlitch' | 'SolarFlare' | 'ToxicBubble';
 
 /** Discrete parallax layers. 0 (or absent) keeps the original continuous z ramp. */
 export type DepthBands = 0 | 2 | 3;
@@ -44,6 +45,17 @@ export interface WindVector {
     x: number;
     y: number;
 }
+
+
+/**
+ * Canvas 2D blend modes accepted on {@link AmbientConfig.blendMode} (v1.5.0).
+ * The tick loop sets `ctx.globalCompositeOperation` before drawing each frame.
+ */
+export type BlendMode =
+    | 'source-over' | 'lighter' | 'screen' | 'multiply' | 'overlay'
+    | 'darken' | 'lighten' | 'color-dodge' | 'color-burn' | 'hard-light'
+    | 'soft-light' | 'difference' | 'exclusion' | 'hue' | 'saturation'
+    | 'color' | 'luminosity';
 
 export interface AmbientConfig {
     behavior: BehaviorName;
@@ -80,6 +92,13 @@ export interface AmbientConfig {
      * round blob into a streak. 0 / absent = round (Snow); ~2.2 = rain.
      */
     stretch?: number;
+    /**
+     * Canvas 2D blend mode (v1.5.0). Optional; defaults to `'source-over'`.
+     * Use `'screen'` or `'lighter'` for glowing atmospheres (Stardust,
+     * SolarFlare, NeonGlitch, MoltenGold, ToxicBubble ship with these).
+     */
+    blendMode?: BlendMode;
+
 }
 
 export interface AmbientOptions {

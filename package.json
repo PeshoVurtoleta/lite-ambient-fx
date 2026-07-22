@@ -1,6 +1,6 @@
 {
   "name": "@zakkster/lite-ambient-fx",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "description": "Zero-dependency fullscreen ambient particle atmospheres. Eleven themed presets across five behaviors (EMBER, MIST, FLOAT, CHAOS, FALL). Parallax depth bands, pointer repel/attract, runtime theme & behavior registries, prefers-reduced-motion auto-degrade, sprite-cached, DPR-aware. One file.",
   "type": "module",
   "main": "./AmbientFX.js",
@@ -57,7 +57,14 @@
     "meteor",
     "cosmic",
     "sandstorm",
-    "bioluminescence"
+    "bioluminescence",
+    "blend-mode",
+    "molten-gold",
+    "shadow-wisp",
+    "stardust",
+    "neon",
+    "solar-flare",
+    "toxic-bubble"
   ],
   "author": "Zahary Shinikchiev <shinikchiev@yahoo.com>",
   "license": "MIT",

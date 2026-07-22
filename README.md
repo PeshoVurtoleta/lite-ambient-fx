@@ -127,7 +127,7 @@ The `Snow` and `Rain` presets here are backdrops. They are the cheap cousin, and
 
 ---
 
-## The seventeen shipped presets
+## The twenty-three shipped presets
 
 | Preset   | Behavior | Vibe                                                        |
 | -------- | -------- | ----------------------------------------------------------- |
@@ -148,6 +148,12 @@ The `Snow` and `Rain` presets here are backdrops. They are the cheap cousin, and
 | `Cosmic`          | EMBER    | Slow purple/violet rise with starry sparks *(v1.4)*        |
 | `Sandstorm`       | MIST     | Horizontal tan/ochre driven by a heavy wind *(v1.4)*       |
 | `Bioluminescence` | CHAOS    | Deep aquamarine CHAOS with cyan sparks *(v1.4)*            |
+| `MoltenGold`      | EMBER    | Gold droplets rising with warm screen glow *(v1.5)*        |
+| `ShadowWisp`      | MIST     | Deep-purple wisps drifting in the dark *(v1.5)*            |
+| `Stardust`        | FLOAT    | Twinkling blue-white float with screen glow *(v1.5)*       |
+| `NeonGlitch`      | CHAOS    | Fast cyan/magenta electric flashes, lighter blend *(v1.5)* |
+| `SolarFlare`      | EMBER    | Intense white-to-red flare, dense count, lighter *(v1.5)*  |
+| `ToxicBubble`     | FLOAT    | Big rising green bubbles with screen glow *(v1.5)*         |
 
 Every preset is a full `AmbientConfig`; you can inspect them at `THEMES[name]` and copy any field into `overrides`. Add your own with [`registerTheme`](#adding-a-custom-theme).
 
@@ -323,6 +329,23 @@ standalone use with a custom render loop.
 Compatible with reduced-motion -- the restore ceiling tracks the effective
 `cfg.count`, so restore never blows through the accessibility floor. See
 `COOKBOOK.md` recipe 7 for a fuller walkthrough.
+
+---
+
+## Blend modes (v1.5.0)
+
+Optional `blendMode` field on the config. Sets `ctx.globalCompositeOperation`
+before the tick draws. Six shipped themes use this: `MoltenGold`, `Stardust`,
+`ToxicBubble` on `'screen'`; `NeonGlitch`, `SolarFlare` on `'lighter'`;
+`ShadowWisp` on plain `'source-over'`.
+
+```js
+fx.updateConfig({ blendMode: 'lighter' });   // additive glow
+```
+
+Every canvas 2D composite mode is accepted; `validateConfig` catches typos.
+Default when omitted is `'source-over'` (backward-compatible with earlier
+themes, none of which shipped a blend mode).
 
 ---
 

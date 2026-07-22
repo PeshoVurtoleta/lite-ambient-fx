@@ -14,7 +14,7 @@
  * (c) 2026 Zahary Shinikchiev. MIT.
  */
 
-export const VERSION = '1.4.1';
+export const VERSION = '1.5.0';
 
 // ============================================================
 //  THEME PRESETS
@@ -274,6 +274,114 @@ export const THEMES = Object.assign(Object.create(null), {
         turbulence: 0.35,
         depthBands: 3,
     },
+
+    // ---- v1.5.0 atmospheres distilled from lite-fx-pro presets ---------
+    //
+    // Each is inspired by a burst preset from @zakkster/lite-fx-pro,
+    // reshaped as a continuous ambient loop with blendMode support.
+    // See COOKBOOK.md recipe 15 for the translation pattern.
+
+    // MoltenGold -- gold droplets rising with screen glow (fx-pro: molten_gold).
+    MoltenGold: {
+        behavior: 'EMBER',
+        colors: ['#f8ecc5', '#dfa956', '#a86f28', '#5c3d18'],
+        spark: '#fff5d9',
+        count: 200,
+        wind: { x: 0.0, y: -0.4 },
+        decay: 0.005,
+        speed: 1.8,
+        size: 6,
+        alpha: 0.85,
+        turbulence: 0.4,
+        depthBands: 3,
+        blendMode: 'screen',
+    },
+
+    // ShadowWisp -- deep purple wisps drifting on darkness (fx-pro: shadow_wisp).
+    // The one v1.5.0 preset that uses source-over -- the goal is subtractive,
+    // not additive; screen would wash it out.
+    ShadowWisp: {
+        behavior: 'MIST',
+        colors: ['#3b1c5c', '#231338', '#100821'],
+        spark: '#5e3982',
+        count: 25,
+        wind: { x: 0.1, y: -0.02 },
+        decay: 0.001,
+        speed: 0.4,
+        size: 90,
+        alpha: 0.5,
+        turbulence: 0.3,
+        depthBands: 2,
+        blendMode: 'source-over',
+    },
+
+    // Stardust -- twinkling FLOAT with screen glow (fx-pro: stardust).
+    Stardust: {
+        behavior: 'FLOAT',
+        colors: ['#f4f7fd', '#c5d3ee', '#7896cd'],
+        spark: '#ffffff',
+        count: 130,
+        wind: { x: 0.05, y: -0.15 },
+        decay: 0.003,
+        speed: 0.5,
+        size: 4.5,
+        alpha: 0.85,
+        turbulence: 0.4,
+        depthBands: 3,
+        blendMode: 'screen',
+    },
+
+    // NeonGlitch -- fast CHAOS with lighter blend for electric cyan/magenta
+    // flash (fx-pro: neon_glitch).
+    NeonGlitch: {
+        behavior: 'CHAOS',
+        colors: ['#54d3f7', '#e46bde', '#3a80d9', '#984abf'],
+        spark: '#ffffff',
+        count: 300,
+        wind: { x: 0.0, y: 0.0 },
+        decay: 0.02,
+        speed: 3.5,
+        size: 3,
+        alpha: 1.0,
+        turbulence: 0.9,
+        depthBands: 2,
+        blendMode: 'lighter',
+    },
+
+    // SolarFlare -- intense EMBER with lighter blend, dense count, deep
+    // orange-to-white ramp (fx-pro: solar_flare).
+    SolarFlare: {
+        behavior: 'EMBER',
+        colors: ['#faf6e2', '#f8b95d', '#e4671e', '#a13411'],
+        spark: '#fff8dc',
+        count: 320,
+        wind: { x: 0.05, y: -0.55 },
+        decay: 0.008,
+        speed: 2.5,
+        size: 5,
+        alpha: 0.9,
+        turbulence: 0.55,
+        depthBands: 3,
+        blendMode: 'lighter',
+    },
+
+    // ToxicBubble -- big rising green bubbles with screen glow (fx-pro:
+    // toxic_bubble). Distinct from Toxic (which is small FLOAT particles
+    // without blend mode) by size + count + additive glow.
+    ToxicBubble: {
+        behavior: 'FLOAT',
+        colors: ['#83f0af', '#4bb27b', '#20714c'],
+        spark: '#c5ffe0',
+        count: 40,
+        wind: { x: 0.0, y: -0.35 },
+        decay: 0.003,
+        speed: 0.7,
+        size: 22,
+        alpha: 0.7,
+        turbulence: 0.3,
+        depthBands: 2,
+        blendMode: 'screen',
+    },
 });
 
 /**
@@ -299,6 +407,12 @@ export const THEME_META = [
     { id: 'Cosmic',           name: 'Cosmic Drift',     icon: 'orbit',   behavior: 'EMBER' },
     { id: 'Sandstorm',        name: 'Sandstorm',        icon: 'dune',    behavior: 'MIST'  },
     { id: 'Bioluminescence',  name: 'Bioluminescence',  icon: 'wave',    behavior: 'CHAOS' },
+    { id: 'MoltenGold',       name: 'Molten Gold',      icon: 'ember',   behavior: 'EMBER' },
+    { id: 'ShadowWisp',       name: 'Shadow Wisp',      icon: 'wisp',    behavior: 'MIST'  },
+    { id: 'Stardust',         name: 'Stardust',         icon: 'star',    behavior: 'FLOAT' },
+    { id: 'NeonGlitch',       name: 'Neon Glitch',      icon: 'bolt',    behavior: 'CHAOS' },
+    { id: 'SolarFlare',       name: 'Solar Flare',      icon: 'sun',     behavior: 'EMBER' },
+    { id: 'ToxicBubble',      name: 'Toxic Bubble',     icon: 'bubble',  behavior: 'FLOAT' },
 ];
 
 // ============================================================
@@ -307,6 +421,16 @@ export const THEME_META = [
 
 const TAU = Math.PI * 2;
 const DEG_TO_RAD = Math.PI / 180;
+
+// v1.5.0: canvas blend modes accepted on AmbientConfig.blendMode. Superset of
+// what every browser has shipped for years; validation catches typos before a
+// silent no-op renders.
+const VALID_BLEND_MODES = [
+    'source-over', 'lighter', 'screen', 'multiply', 'overlay',
+    'darken', 'lighten', 'color-dodge', 'color-burn', 'hard-light',
+    'soft-light', 'difference', 'exclusion', 'hue', 'saturation',
+    'color', 'luminosity',
+];
 
 // 360-entry sine LUT for turbulence and MIST breathing.
 const SIN = new Float32Array(360);
@@ -552,6 +676,15 @@ export function validateConfig(cfg) {
         && (typeof cfg.stretch !== 'number' || !Number.isFinite(cfg.stretch) || cfg.stretch < 0)) {
         throw new RangeError('AmbientFX: stretch must be a finite non-negative number');
     }
+        if (cfg.blendMode !== undefined) {
+        const bm = cfg.blendMode;
+        if (typeof bm !== 'string' || VALID_BLEND_MODES.indexOf(bm) < 0) {
+            throw new TypeError(
+                `validateConfig: blendMode must be one of ${VALID_BLEND_MODES.join(', ')}, got ${JSON.stringify(bm)}`
+            );
+        }
+    }
+
     return cfg;
 }
 
@@ -2056,6 +2189,7 @@ export function createAmbientFX(canvas, options) {
         }
 
         const behavior = resolveBehavior(cfg.behavior);
+        ctx.globalCompositeOperation = cfg.blendMode || 'source-over';
 
         // Populate the pooled frame context. No allocation.
         frame.cfg = cfg;

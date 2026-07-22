@@ -5,6 +5,69 @@ All notable changes to `@zakkster/lite-ambient-fx` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] -- 2026-07-22
+
+Six new atmospheres distilled from `@zakkster/lite-fx-pro` presets, plus opt-in
+`blendMode` support to make them read right.
+
+### Added
+
+- **`blendMode`** field on `AmbientConfig`. Optional string; defaults to
+  `'source-over'`. Set once per frame via `ctx.globalCompositeOperation` before
+  the behavior tick draws. Validated against the canonical 17-value canvas 2D
+  set; typos throw with a helpful error.
+
+  ```js
+  fx.updateConfig({ blendMode: 'lighter' });   // additive glow
+  ```
+
+- **`BlendMode` type** exported from the `.d.ts`.
+
+- **Six new atmospheres** (23 total now), each distilled from a
+  `@zakkster/lite-fx-pro` burst preset:
+
+  | Preset | Behavior | Blend | Vibe |
+  |---|---|---|---|
+  | `MoltenGold` | EMBER | screen | Gold droplets rising with warm glow (`molten_gold`) |
+  | `ShadowWisp` | MIST | source-over | Deep-purple wisps drifting in the dark (`shadow_wisp`) |
+  | `Stardust` | FLOAT | screen | Twinkling blue-white float (`stardust`) |
+  | `NeonGlitch` | CHAOS | lighter | Fast cyan/magenta electric flashes (`neon_glitch`) |
+  | `SolarFlare` | EMBER | lighter | Intense white-to-red flare, dense count (`solar_flare`) |
+  | `ToxicBubble` | FLOAT | screen | Big rising green bubbles (`toxic_bubble`) |
+
+  These are `@zakkster/lite-fx-pro` recipes -- not direct ports. Burst presets
+  (count=N, rate=0, one-shot) reshape into continuous ambient loops with
+  matched palette and physics feel. See COOKBOOK.md recipe 15 for the
+  translation pattern.
+
+### Changed
+
+- `BuiltInTheme` union in the type declarations expanded to all 23 themes.
+- Test file `test/01-config_test.mjs` bumped `seventeen` -> `twenty-three`.
+- Test file `test/03-registry_test.mjs` renamed a synthetic `SolarFlare` test
+  fixture to `PlasmaWave` (SolarFlare is now a shipped built-in).
+
+### Tests
+
+- **`test/12-blend-mode_test.mjs`** -- 14 new tests: `validateConfig` accepts
+  every canonical blend mode; rejects typos with a helpful error; each v1.5.0
+  theme declares a valid `blendMode`; `mergeThemeConfig` preserves override
+  precedence. Numbered `12-` because slot `11-` is the v1.4.1 torture suite.
+
+- **238 -> 252 tests, 100% pass** on Node 20+.
+
+### Bundle
+
+- Package still one file, still zero runtime dependencies. `blendMode` adds
+  one property write per frame -- no allocation, no branching in the behavior
+  hot path.
+
+### Not in this release
+
+- **Worker mode (`/worker` entry)** still deferred.
+- **Scale curves** across life (fx-pro `scaleCurve` [start, mid?, end]) --
+  would require touching each behavior tick. Considered for a future release.
+
 ## [1.4.1] -- 2026-07-22
 
 Correctness pass. Seven defects, all found by adversarial torture testing under

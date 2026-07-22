@@ -428,10 +428,10 @@ describe('registerTheme', () => {
     });
 
     test('appends to THEME_META so existing pickers keep working', () => {
-        registerTheme('SolarFlare', CUSTOM());
-        const meta = THEME_META.find((m) => m.id === 'SolarFlare');
+        registerTheme('PlasmaWave', CUSTOM());
+        const meta = THEME_META.find((m) => m.id === 'PlasmaWave');
         assert.ok(meta, 'meta entry created');
-        assert.equal(meta.name, 'Solar Flare', 'de-camelCased display name');
+        assert.equal(meta.name, 'Plasma Wave', 'de-camelCased display name');
         assert.equal(meta.icon, 'sparks', 'icon derived from the EMBER behavior');
         assert.equal(meta.behavior, 'EMBER');
     });

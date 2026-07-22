@@ -410,3 +410,86 @@ Cost: next-frame re-rasterization for whatever colors are still needed, then
 steady state. Practical rule: call after a wide OKLCH sweep, or on scene changes
 you know are permanent.
 
+---
+
+## 15. Translate `@zakkster/lite-fx-pro` presets into ambient themes
+
+`lite-fx-pro` ships burst presets (`count: N`, `rate: 0` -- one-shot bursts of
+particles like `explosion.json`, `stardust.json`, `molten_gold.json`).
+`lite-ambient-fx` renders **continuous** atmospheres. Direct 1:1 porting
+doesn't work, but the *vibe* of many fx-pro presets translates cleanly.
+
+The translation pattern below is what shipped six of v1.5.0's atmospheres.
+
+### Field map
+
+| fx-pro                          | ambient-fx                                  |
+|---------------------------------|---------------------------------------------|
+| `emission.count`                | scale to `count` (drop 5-10x -- continuous streams don't need burst density) |
+| `emission.angle` (radians)      | `wind.y` sign (angle around -pi/2 -> upward) |
+| `emission.spread`               | pick behavior: narrow spread + upward -> EMBER; full circle -> CHAOS |
+| `physics.speed`, `speedVariance`| divide by ~60 -> ambient's `speed` (which is a per-16ms delta multiplier) |
+| `physics.gravity`               | negative gravity -> upward `wind.y`; positive -> FALL behavior |
+| `physics.drag`                  | folded into `decay` (higher drag -> lower decay) |
+| `lifecycle.lifeTime`            | inverse of `decay` |
+| `visuals.baseRadius`            | `size` (divide by ~2) |
+| `visuals.colors` (OKLCH strings)| convert to hex, keep the 3-4 color chain |
+| `visuals.blendMode`             | keep as-is on the ambient `blendMode` field (v1.5.0) |
+
+### Behavior chooser
+
+| fx-pro shape                                | ambient behavior |
+|---------------------------------------------|------------------|
+| angle = -pi/2, moderate spread, upward pull | `EMBER`          |
+| angle = -pi/2, wide spread, downward gravity| `FALL`           |
+| full spread (~2*pi), fast, short life       | `CHAOS`          |
+| upward pull, long life, sine sway feel      | `FLOAT`          |
+| slow, wide, breathing scale curve           | `MIST`           |
+
+### Worked example: `molten_gold.json` -> `MoltenGold` theme
+
+fx-pro preset:
+
+```json
+{
+  "id": "molten_gold",
+  "emission": { "count": 11, "angle": -1.5708, "spread": 1.88 },
+  "physics":  { "speed": 115, "speedVariance": 65, "gravity": 600, "drag": 0.96 },
+  "lifecycle":{ "lifeTime": 1.0, "lifeVariance": 0.4 },
+  "visuals":  { "colors": ["oklch(0.97 0.05 60)", "oklch(0.82 0.2 70)", ...],
+                "baseRadius": 12, "blendMode": "screen" }
+}
+```
+
+Ambient theme:
+
+```js
+MoltenGold: {
+    behavior:  'EMBER',                              // upward + narrow spread
+    colors:    ['#f8ecc5', '#dfa956', '#a86f28', '#5c3d18'],   // OKLCH -> hex
+    spark:     '#fff5d9',
+    count:     200,                                  // continuous, so multiply
+    wind:      { x: 0.0, y: -0.4 },                  // upward bias
+    decay:     0.005,                                // ~ 1/lifeTime scaled
+    speed:     1.8,                                  // ~ 115 / 60
+    size:      6,                                    // ~ baseRadius / 2
+    alpha:     0.85,
+    turbulence:0.4,
+    depthBands:3,
+    blendMode: 'screen',                             // same as fx-pro
+},
+```
+
+### When to skip the port
+
+Presets that don't map well:
+
+- **Pure bursts** (`explosion.json`, `fireball.json`, `crystal_shatter.json`,
+  `sparkles.json`) -- one-shot flash-and-die. Ambient wants continuous life.
+  Use fx-pro directly for these.
+- **Presets already covered by shipped themes.** `sakura_petals.json` maps
+  onto ambient's `Sakura` (v1.4.0); `firefly_swarm.json` onto `Fireflies`
+  (v1.4.0); `smoke.json` fits in the `Frost`/`Sandstorm` territory.
+
+If in doubt, mount both instances stacked and see which reads right in your
+scene.
