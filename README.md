@@ -349,6 +349,29 @@ themes, none of which shipped a blend mode).
 
 ---
 
+## Curves (v1.6.0)
+
+Two optional fields, `alphaCurve` and `sizeCurve`, sample a piecewise-linear
+curve at `life` (0 -> 1) and multiply the behavior's alpha and size outputs.
+Six shipped themes use these to match their `@zakkster/lite-fx-pro` parent
+presets:
+
+```js
+fx.updateConfig({
+    alphaCurve: [0, 1, 0],    // 3-point: fade in and out
+    sizeCurve:  [1, 3],       // 2-point: grow to 3x by end of life
+});
+```
+
+Curves are arrays of `>= 2` finite numbers. `[a, b]` linear, `[a, b, c]`
+piecewise via midpoint, `[k0..kN]` piecewise across N segments. The exported
+`sampleCurve(curve, t)` is available if you need it in a custom loop.
+
+Backward-compatible: absent curves mean identical rendering to v1.5.0.
+Present curves compound with the behavior's built-in alpha shape.
+
+---
+
 ## Adding a custom theme
 
 `THEMES` is a registry, not a constant. Register a complete `AmbientConfig` and it becomes immediately available to `createAmbientFX({ theme })` and `setTheme()` — and appears in `THEME_META`, so an existing theme picker shows it with no code change.

@@ -14,7 +14,7 @@
  * (c) 2026 Zahary Shinikchiev. MIT.
  */
 
-export const VERSION = '1.5.0';
+export const VERSION = '1.6.0';
 
 // ============================================================
 //  THEME PRESETS
@@ -200,7 +200,7 @@ export const THEMES = Object.assign(Object.create(null), {
         spark: '#fffbe6',
         count: 90,
         wind: { x: 0.0, y: -0.05 },
-        decay: 0.0016,
+        decay: 0.0006,
         speed: 0.4,
         size: 3.5,
         alpha: 0.9,
@@ -295,6 +295,7 @@ export const THEMES = Object.assign(Object.create(null), {
         turbulence: 0.4,
         depthBands: 3,
         blendMode: 'screen',
+        sizeCurve: [1.25, 2.5],
     },
 
     // ShadowWisp -- deep purple wisps drifting on darkness (fx-pro: shadow_wisp).
@@ -313,6 +314,8 @@ export const THEMES = Object.assign(Object.create(null), {
         turbulence: 0.3,
         depthBands: 2,
         blendMode: 'source-over',
+        sizeCurve: [2.0, 7.5],
+        alphaCurve: [0.0, 0.8, 0.0],
     },
 
     // Stardust -- twinkling FLOAT with screen glow (fx-pro: stardust).
@@ -322,13 +325,15 @@ export const THEMES = Object.assign(Object.create(null), {
         spark: '#ffffff',
         count: 130,
         wind: { x: 0.05, y: -0.15 },
-        decay: 0.003,
+        decay: 0.0008,
         speed: 0.5,
         size: 4.5,
         alpha: 0.85,
         turbulence: 0.4,
         depthBands: 3,
         blendMode: 'screen',
+        sizeCurve: [0.5, 0.0],
+        alphaCurve: [0.0, 1.0, 0.0],
     },
 
     // NeonGlitch -- fast CHAOS with lighter blend for electric cyan/magenta
@@ -346,6 +351,7 @@ export const THEMES = Object.assign(Object.create(null), {
         turbulence: 0.9,
         depthBands: 2,
         blendMode: 'lighter',
+        sizeCurve: [0.5, 1.25],
     },
 
     // SolarFlare -- intense EMBER with lighter blend, dense count, deep
@@ -363,6 +369,7 @@ export const THEMES = Object.assign(Object.create(null), {
         turbulence: 0.55,
         depthBands: 3,
         blendMode: 'lighter',
+        sizeCurve: [1.5, 0.5],
     },
 
     // ToxicBubble -- big rising green bubbles with screen glow (fx-pro:
@@ -374,13 +381,15 @@ export const THEMES = Object.assign(Object.create(null), {
         spark: '#c5ffe0',
         count: 40,
         wind: { x: 0.0, y: -0.35 },
-        decay: 0.003,
+        decay: 0.0008,
         speed: 0.7,
         size: 22,
         alpha: 0.7,
         turbulence: 0.3,
         depthBands: 2,
         blendMode: 'screen',
+        sizeCurve: [1.0, 4.5],
+        alphaCurve: [0.0, 0.8, 0.0],
     },
 });
 
@@ -454,6 +463,7 @@ const ALPHA_EPSILON = 0.01;
 // MIST life is a ms accumulator; wrap keeps the breath phase stable and
 // avoids Float32 drift on multi-minute sessions.
 const MIST_LIFE_WRAP_MS = 72_000;
+const MIST_LIFE_WRAP_INV = 1 / MIST_LIFE_WRAP_MS;
 
 // How far past the top edge an EMBER/FLOAT particle can go before we
 // consider it dead and respawn from the bottom.
@@ -634,6 +644,24 @@ export function mergeThemeConfig(base, overrides) {
  * Validate a config object. Throws with a specific message on the first
  * violation. Cheap enough to run on every setTheme.
  */
+
+// v1.6.0: curve validator. Enforces array of >= 2 finite numbers; caught early
+// so a typo doesn't render as a silent no-op on the hot path.
+function validateCurve(curve, name) {
+    if (!Array.isArray(curve)) {
+        throw new TypeError(`validateConfig: ${name} must be an array, got ${typeof curve}`);
+    }
+    if (curve.length < 2) {
+        throw new RangeError(`validateConfig: ${name} needs at least 2 control points, got ${curve.length}`);
+    }
+    for (let i = 0; i < curve.length; i++) {
+        const v = curve[i];
+        if (typeof v !== 'number' || !Number.isFinite(v)) {
+            throw new TypeError(`validateConfig: ${name}[${i}] must be a finite number, got ${JSON.stringify(v)}`);
+        }
+    }
+}
+
 export function validateConfig(cfg) {
     if (!cfg || typeof cfg !== 'object') throw new TypeError('AmbientFX: config must be an object');
     if (typeof cfg.behavior !== 'string' || BEHAVIORS[cfg.behavior] === undefined) {
@@ -684,6 +712,9 @@ export function validateConfig(cfg) {
             );
         }
     }
+
+    if (cfg.alphaCurve !== undefined) validateCurve(cfg.alphaCurve, 'alphaCurve');
+    if (cfg.sizeCurve !== undefined) validateCurve(cfg.sizeCurve, 'sizeCurve');
 
     return cfg;
 }
@@ -840,6 +871,45 @@ export function envelopeAlpha(mode, life, maxAlpha) {
         return maxAlpha;
     }
     return maxAlpha;
+}
+
+
+/**
+ * Sample a linear curve at t. Curve is an array of >= 2 numbers, treated
+ * as evenly spaced control points across life [0, 1]. Zero-alloc.
+ *
+ * Common shapes:
+ *   [start, end]              -- linear from start to end.
+ *   [start, mid, end]         -- piecewise linear via mid at t=0.5.
+ *   [k0, k1, ... kN]          -- piecewise linear across N segments.
+ *
+ * Values outside [0, 1] clamp to the endpoints.
+ *
+ * @param {number[]} curve
+ * @param {number}   t     Position in [0, 1]. Values outside clamp.
+ * @returns {number}
+ */
+export function sampleCurve(curve, t) {
+    if (!(t > 0)) return curve[0];   // also catches NaN
+    const n = curve.length - 1;
+    if (t >= 1) return curve[n];
+    if (n === 1) {
+        return curve[0] + (curve[1] - curve[0]) * t;
+    }
+    if (n === 2) {
+        // 3-point piecewise linear through curve[1] at t=0.5.
+        if (t < 0.5) {
+            const u = t * 2;
+            return curve[0] + (curve[1] - curve[0]) * u;
+        }
+        const u = (t - 0.5) * 2;
+        return curve[1] + (curve[2] - curve[1]) * u;
+    }
+    // N-point piecewise linear across N segments.
+    const segF = t * n;
+    const seg = segF | 0;
+    const u = segF - seg;
+    return curve[seg] + (curve[seg + 1] - curve[seg]) * u;
 }
 
 /**
@@ -1498,7 +1568,7 @@ BEHAVIORS.EMBER = {
         p.z = sampleDepth(cfg.depthBands);
         p.color = Math.random() > 0.9 ? cfg.spark : cfg.colors[(Math.random() * cfg.colors.length) | 0];
         p.spriteCanvas = frame.getSprite(p.color, SPRITE_LOGICAL_CORE);
-        p.life = 0;
+        p.life = frame.isInit ? Math.random() : 0;
         p.x = Math.random() * W;
         p.y = frame.isInit ? Math.random() * H : H + 20;
         p.size = (Math.random() * cfg.size + 2) * p.z;
@@ -1519,6 +1589,8 @@ BEHAVIORS.EMBER = {
 
     tick(particles, ctx, frame) {
         const cfg = frame.cfg;
+        const alphaCurve = cfg.alphaCurve;
+        const sizeCurve = cfg.sizeCurve;
         const wind = cfg.wind;
         const turbFactor = cfg.turbulence;
         const ds = frame.ds;
@@ -1543,20 +1615,24 @@ BEHAVIORS.EMBER = {
             // decay: 0 or alpha: 0 -- both of which validateConfig accepts --
             // respawned every particle on every frame and rendered nothing.
             if (p.y < -RESPAWN_MARGIN_Y || p.life >= 1) { respawn(p, false); continue; }
-            const alpha = p.life < fadeInSpan
+            let alpha = p.life < fadeInSpan
                 ? p.life * EMBER_FADE_IN_INV * p.maxAlpha
                 : fadeOutInv * (1 - p.life) * p.maxAlpha;
+            if (alphaCurve !== undefined) alpha *= sampleCurve(alphaCurve, p.life);
             if (alpha > ALPHA_EPSILON) {
                 const a = alpha > 1 ? 1 : alpha;
                 ctx.globalAlpha = a;
-                const half = p.size * 0.5;
-                ctx.drawImage(
-                    p.spriteCanvas,
-                    (p.x - half) | 0,
-                    (p.y - half) | 0,
-                    p.size | 0,
-                    p.size | 0,
-                );
+                const drawSize = sizeCurve !== undefined ? p.size * sampleCurve(sizeCurve, p.life) : p.size;
+                if (drawSize >= 1) {
+                    const half = drawSize * 0.5;
+                    ctx.drawImage(
+                        p.spriteCanvas,
+                        (p.x - half) | 0,
+                        (p.y - half) | 0,
+                        drawSize | 0,
+                        drawSize | 0,
+                    );
+                }
             }
         }
     },
@@ -1573,7 +1649,7 @@ BEHAVIORS.MIST = {
         p.z = sampleDepth(cfg.depthBands);
         p.color = Math.random() > 0.9 ? cfg.spark : cfg.colors[(Math.random() * cfg.colors.length) | 0];
         p.spriteCanvas = frame.getSprite(p.color, SPRITE_LOGICAL_MIST);
-        p.life = 0;
+        p.life = frame.isInit ? Math.random() : 0;
         p.x = Math.random() * W;
         p.y = Math.random() * H;
         p.anchorX = p.x;
@@ -1592,6 +1668,8 @@ BEHAVIORS.MIST = {
 
     tick(particles, ctx, frame) {
         const cfg = frame.cfg;
+        const alphaCurve = cfg.alphaCurve;
+        const sizeCurve = cfg.sizeCurve;
         const wind = cfg.wind;
         const turbFactor = cfg.turbulence;
         const ds = frame.ds;
@@ -1616,9 +1694,16 @@ BEHAVIORS.MIST = {
             else if (p.anchorY < -margin) p.anchorY = H + margin;
             const timeIdx = (p.life * 0.05) | 0;
             const breath = (sinLut(timeIdx + p.pulseOffset) + 1) * 0.5;
-            const alpha = 0.05 + breath * p.maxAlpha;
-            const drawSize = p.size * (0.9 + breath * 0.2);
-            if (alpha > ALPHA_EPSILON) {
+            let alpha = 0.05 + breath * p.maxAlpha;
+            // MIST p.life is milliseconds (0..MIST_LIFE_WRAP_MS), not the [0,1]
+            // that curves expect; normalize before sampling so the curve spans
+            // one wrap cycle instead of always clamping to its last point.
+            const lifeN = alphaCurve !== undefined || sizeCurve !== undefined
+                ? p.life * MIST_LIFE_WRAP_INV : 0;
+            if (alphaCurve !== undefined) alpha *= sampleCurve(alphaCurve, lifeN);
+            const scMul = sizeCurve !== undefined ? sampleCurve(sizeCurve, lifeN) : 1;
+            const drawSize = p.size * (0.9 + breath * 0.2) * scMul;
+            if (alpha > ALPHA_EPSILON && drawSize >= 1) {
                 const a = alpha > 1 ? 1 : alpha;
                 ctx.globalAlpha = a;
                 const half = drawSize * 0.5;
@@ -1645,7 +1730,7 @@ BEHAVIORS.FLOAT = {
         p.z = sampleDepth(cfg.depthBands);
         p.color = Math.random() > 0.9 ? cfg.spark : cfg.colors[(Math.random() * cfg.colors.length) | 0];
         p.spriteCanvas = frame.getSprite(p.color, SPRITE_LOGICAL_CORE);
-        p.life = 0;
+        p.life = frame.isInit ? Math.random() : 0;
         p.x = Math.random() * W;
         p.y = frame.isInit ? Math.random() * H : H + 20;
         p.size = (Math.random() * cfg.size + 4) * p.z;
@@ -1664,6 +1749,8 @@ BEHAVIORS.FLOAT = {
 
     tick(particles, ctx, frame) {
         const cfg = frame.cfg;
+        const alphaCurve = cfg.alphaCurve;
+        const sizeCurve = cfg.sizeCurve;
         const wind = cfg.wind;
         const ds = frame.ds;
         const respawn = frame.respawn;
@@ -1684,17 +1771,21 @@ BEHAVIORS.FLOAT = {
             if (p.life < fadeInSpan) alpha = p.life * FLOAT_FADE_INV * p.maxAlpha;
             else if (p.life > fadeOutStart) alpha = (1 - p.life) * FLOAT_FADE_INV * p.maxAlpha;
             else alpha = p.maxAlpha;
+            if (alphaCurve !== undefined) alpha *= sampleCurve(alphaCurve, p.life);
             if (alpha > ALPHA_EPSILON) {
                 const a = alpha > 1 ? 1 : alpha;
                 ctx.globalAlpha = a;
-                const half = p.size * 0.5;
-                ctx.drawImage(
-                    p.spriteCanvas,
-                    (p.x - half) | 0,
-                    (p.y - half) | 0,
-                    p.size | 0,
-                    p.size | 0,
-                );
+                const drawSize = sizeCurve !== undefined ? p.size * sampleCurve(sizeCurve, p.life) : p.size;
+                if (drawSize >= 1) {
+                    const half = drawSize * 0.5;
+                    ctx.drawImage(
+                        p.spriteCanvas,
+                        (p.x - half) | 0,
+                        (p.y - half) | 0,
+                        drawSize | 0,
+                        drawSize | 0,
+                    );
+                }
             }
         }
     },
@@ -1711,7 +1802,7 @@ BEHAVIORS.CHAOS = {
         p.z = sampleDepth(cfg.depthBands);
         p.color = Math.random() > 0.9 ? cfg.spark : cfg.colors[(Math.random() * cfg.colors.length) | 0];
         p.spriteCanvas = frame.getSprite(p.color, SPRITE_LOGICAL_CORE);
-        p.life = 0;
+        p.life = frame.isInit ? Math.random() : 0;
         p.x = Math.random() * W;
         p.y = Math.random() * H;
         p.size = Math.random() * cfg.size + 1;
@@ -1729,6 +1820,9 @@ BEHAVIORS.CHAOS = {
     },
 
     tick(particles, ctx, frame) {
+        const cfg = frame.cfg;
+        const alphaCurve = cfg.alphaCurve;
+        const sizeCurve = cfg.sizeCurve;
         const ds = frame.ds;
         const respawn = frame.respawn;
         const W = frame.W;
@@ -1746,18 +1840,22 @@ BEHAVIORS.CHAOS = {
                 continue;
             }
             const flickerBit = (phase + p.id) & 1;
-            const alpha = flickerBit ? p.maxAlpha : p.maxAlpha * 0.3;
+            let alpha = flickerBit ? p.maxAlpha : p.maxAlpha * 0.3;
+            if (alphaCurve !== undefined) alpha *= sampleCurve(alphaCurve, p.life);
             if (alpha > ALPHA_EPSILON) {
                 const a = alpha > 1 ? 1 : alpha;
                 ctx.globalAlpha = a;
-                const half = p.size * 0.5;
-                ctx.drawImage(
-                    p.spriteCanvas,
-                    (p.x - half) | 0,
-                    (p.y - half) | 0,
-                    p.size | 0,
-                    p.size | 0,
-                );
+                const drawSize = sizeCurve !== undefined ? p.size * sampleCurve(sizeCurve, p.life) : p.size;
+                if (drawSize >= 1) {
+                    const half = drawSize * 0.5;
+                    ctx.drawImage(
+                        p.spriteCanvas,
+                        (p.x - half) | 0,
+                        (p.y - half) | 0,
+                        drawSize | 0,
+                        drawSize | 0,
+                    );
+                }
             }
         }
     },
@@ -1794,7 +1892,7 @@ BEHAVIORS.FALL = {
         p.z = sampleDepth(cfg.depthBands);
         p.color = Math.random() > 0.9 ? cfg.spark : cfg.colors[(Math.random() * cfg.colors.length) | 0];
         p.spriteCanvas = frame.getSprite(p.color, SPRITE_LOGICAL_CORE);
-        p.life = 0;
+        p.life = frame.isInit ? Math.random() : 0;
 
         // Wind shears the column sideways. Widen the spawn band upwind so the
         // leading edge doesn't starve -- otherwise a strong wind.x leaves a
@@ -1825,6 +1923,8 @@ BEHAVIORS.FALL = {
 
     tick(particles, ctx, frame) {
         const cfg = frame.cfg;
+        const alphaCurve = cfg.alphaCurve;
+        const sizeCurve = cfg.sizeCurve;
         const wind = cfg.wind;
         const ds = frame.ds;
         const W = frame.W;
@@ -1860,21 +1960,24 @@ BEHAVIORS.FALL = {
                 continue;
             }
 
-            const alpha = p.life < fadeSpan
+            let alpha = p.life < fadeSpan
                 ? p.life * fadeInv * p.maxAlpha
                 : p.maxAlpha;
+            if (alphaCurve !== undefined) alpha *= sampleCurve(alphaCurve, p.life);
 
             if (alpha > ALPHA_EPSILON) {
                 ctx.globalAlpha = alpha > 1 ? 1 : alpha;
-                const w = p.size;
-                const h = stretch === 0 ? w : w + p.vy * stretch;
-                ctx.drawImage(
-                    p.spriteCanvas,
-                    (p.x - w * 0.5) | 0,
-                    (p.y - h * 0.5) | 0,
-                    w | 0,
-                    h | 0,
-                );
+                const w = sizeCurve !== undefined ? p.size * sampleCurve(sizeCurve, p.life) : p.size;
+                if (w >= 1) {
+                    const h = stretch === 0 ? w : w + p.vy * stretch;
+                    ctx.drawImage(
+                        p.spriteCanvas,
+                        (p.x - w * 0.5) | 0,
+                        (p.y - h * 0.5) | 0,
+                        w | 0,
+                        h | 0,
+                    );
+                }
             }
         }
     },

@@ -57,6 +57,19 @@ export type BlendMode =
     | 'soft-light' | 'difference' | 'exclusion' | 'hue' | 'saturation'
     | 'color' | 'luminosity';
 
+
+/**
+ * A visual curve across a particle's lifetime (v1.6.0). An array of at least
+ * two evenly-spaced control points, evaluated at `t = life`.
+ *
+ * `[start, end]`          - linear from `start` at t=0 to `end` at t=1.
+ * `[start, mid, end]`     - piecewise linear via `mid` at t=0.5.
+ * `[k0, k1, ... kN]`      - piecewise linear across N segments.
+ *
+ * See {@link sampleCurve} for the sampler.
+ */
+export type Curve = readonly number[];
+
 export interface AmbientConfig {
     behavior: BehaviorName;
     /** Base palette. Particles pick uniformly at random from these. */
@@ -98,6 +111,21 @@ export interface AmbientConfig {
      * SolarFlare, NeonGlitch, MoltenGold, ToxicBubble ship with these).
      */
     blendMode?: BlendMode;
+
+    /**
+     * Optional life-based alpha multiplier (v1.6.0). Applied AFTER the
+     * behavior's built-in alpha envelope (EMBER/FLOAT/FALL fade curves,
+     * MIST breathing, CHAOS flicker). Set to e.g. `[0, 1, 0]` for a
+     * gentle fade-in/fade-out on top of the behavior default.
+     */
+    alphaCurve?: Curve;
+
+    /**
+     * Optional life-based size multiplier (v1.6.0). Applied to `p.size` at
+     * draw time. Set to e.g. `[1, 2.5]` for particles that grow across
+     * their lifetime, or `[0.5, 0]` for shrinking sparkles.
+     */
+    sizeCurve?: Curve;
 
 }
 
@@ -504,3 +532,11 @@ export interface FrameBudget {
  * createAmbientFX via `options.frameBudget`.
  */
 export function createFrameBudget(opts?: FrameBudgetOptions): FrameBudget;
+
+/**
+ * Sample a linear curve at t. Curve is an array of >= 2 numbers, treated as
+ * evenly-spaced control points across life [0, 1]. Zero-alloc.
+ *
+ * Values of t outside [0, 1] clamp to the endpoints.
+ */
+export function sampleCurve(curve: Curve, t: number): number;

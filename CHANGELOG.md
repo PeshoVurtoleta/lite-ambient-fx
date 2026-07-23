@@ -5,6 +5,122 @@ All notable changes to `@zakkster/lite-ambient-fx` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] -- 2026-07-22
+
+Life-based curves for alpha and size. Six shipped themes now grow and fade
+the way their `@zakkster/lite-fx-pro` parents did; user themes can opt in
+without changing behavior code.
+
+### Added
+
+- **`sampleCurve(curve, t)`** -- exported. Zero-alloc piecewise-linear sampler
+  for arrays of >= 2 evenly-spaced control points across life `[0, 1]`.
+  Clamps `t` outside the range to the endpoints. Handles 2, 3, and N-point
+  curves in one function.
+
+  ```js
+  sampleCurve([0, 1], 0.5);      // 0.5    (linear)
+  sampleCurve([0, 1, 0], 0.5);   // 1      (peak at midpoint)
+  sampleCurve([1, 0, 1, 0.5], 0.666); // piecewise via 4-point
+  ```
+
+- **`alphaCurve?` on `AmbientConfig`** -- optional life-based multiplier on
+  the alpha already computed by the behavior. Compounds with EMBER/FLOAT/FALL
+  envelopes, MIST breathing, CHAOS flicker. `undefined` means no change from
+  v1.5.0 behavior.
+
+- **`sizeCurve?` on `AmbientConfig`** -- optional life-based multiplier on
+  `p.size` at draw time. For FALL, applied to base size before the vy-driven
+  stretch is added.
+
+- **`Curve` type** exported from the `.d.ts`. `readonly number[]`.
+
+- **Six v1.5.0 fx-pro-inspired themes now carry their parent presets curves**:
+
+  | Theme | sizeCurve | alphaCurve |
+  |---|---|---|
+  | `MoltenGold` | `[1.25, 2.5]` | -- |
+  | `ShadowWisp` | `[2.0, 7.5]` | `[0.0, 0.8, 0.0]` |
+  | `Stardust` | `[0.5, 0.0]` | `[0.0, 1.0, 0.0]` |
+  | `NeonGlitch` | `[0.5, 1.25]` | -- |
+  | `SolarFlare` | `[1.5, 0.5]` | -- |
+  | `ToxicBubble` | `[1.0, 4.5]` | `[0.0, 0.8, 0.0]` |
+
+  `ShadowWisp` now actually expands 2x -> 7.5x like its `shadow_wisp.json`
+  parent. `Stardust` twinkles into existence and fades out. `ToxicBubble`
+  inflates as it rises.
+
+### Fixed
+
+- **MIST curves are sampled at normalized life.** Every other behavior tracks
+  `p.life` in `[0, 1]`, but MIST accumulates it in milliseconds (0 to
+  `MIST_LIFE_WRAP_MS`). `sampleCurve(curve, p.life)` therefore always saw
+  `t >= 1` and clamped to the curve's last control point -- so `ShadowWisp`
+  (`alphaCurve: [0.0, 0.8, 0.0]`, ending at 0) rendered nothing at all. MIST
+  now normalizes life before sampling; both its `alphaCurve` and `sizeCurve`
+  track the wrap cycle.
+
+- **A `sizeCurve` reaching 0 no longer pops particles out early.** `Stardust`
+  ships `sizeCurve: [0.5, 0.0]`, so `drawSize` fell below 1px (and `| 0`
+  truncated to 0) from ~life 0.72 while the particle was still alpha-visible --
+  ~59% of visible Stardust particles blinked out instead of shrinking to a
+  point. All five behaviors now skip the blit once the draw size drops below
+  1px. Visible output for curve-less themes is unchanged (those sub-pixel blits
+  were already width-0 no-ops).
+
+- **`sampleCurve(curve, t)` is NaN-safe.** A non-finite `t` fell through both
+  clamps and returned `NaN`; it now clamps to the curve's start.
+
+- **FLOAT fields no longer collapse to the bottom.** Every behavior seeded
+  `p.life = 0`, so the whole initial cohort crossed `life >= 1` on the same
+  frame and respawned at the bottom together -- a pulsing collapse. And
+  `ToxicBubble`/`Stardust` (`decay 0.003`) plus `Fireflies` (`decay 0.0016`)
+  died of old age mid-screen before rising across the viewport. Initial life is
+  now staggered across `[0, 1)` at all five spawn sites, and the three presets
+  are retuned to `0.0008`/`0.0008`/`0.0006` so particles live long enough to
+  cross. (This fix predates the curve work but had not shipped.)
+
+- **`COOKBOOK.md` recipe 9** documented the reduced-motion opt-out as
+  `respectReduced: false`; the actual option key is `reducedMotion: false`
+  (the old key was silently ignored, leaving auto-degrade on). Corrected.
+
+- Cosmetic: fixed the indentation of the two `validateConfig` curve checks.
+
+### Changed
+
+- All five built-in behaviors (`EMBER`, `MIST`, `FLOAT`, `CHAOS`, `FALL`)
+  gained curve wiring in their tick loops. Cost when curves are absent:
+  two null checks per particle per frame (the fast path).
+
+- `AmbientFX.js` grew ~120 lines: `sampleCurve` helper + `validateCurve`
+  guard + curve captures at the top of each tick + curve application at
+  each `drawImage` site.
+
+### Tests
+
+- **`test/13-curves_test.mjs`** -- 25 new tests: endpoint clamps, 2/3/N-point
+  piecewise math, no-alloc soft check across 100 000 samples, `validateConfig`
+  accepts/rejects curve arrays, all six v1.5.0 themes ship the expected curve
+  shapes.
+- **277 tests / 53 suites, 100% pass** on Node 20+.
+
+### Bundle
+
+- Still one file, still zero runtime dependencies. Curves add one number
+  per particle per frame when active; two null checks per particle when
+  absent (backward-compatible fast path).
+
+### Not in this release
+
+- **Worker mode (`/worker` entry)** -- deferred to v1.7.0. Curves make the
+  config surface more expressive, which is a good thing to ship BEFORE the
+  worker boundary (fewer future changes to the transport shape).
+- **Custom easing / non-linear curves** -- linear piecewise only, matching
+  fx-pro's convention. Add-on easings are a v1.8+ possibility.
+- **Color curves** across life -- v1.3.0's `lerpTheme` handles theme-level
+  color transitions; per-particle color-over-life would need a per-particle
+  color slot (currently one color per particle at spawn). Not planned.
+
 ## [1.5.0] -- 2026-07-22
 
 Six new atmospheres distilled from `@zakkster/lite-fx-pro` presets, plus opt-in

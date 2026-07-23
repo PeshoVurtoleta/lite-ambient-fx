@@ -220,7 +220,7 @@ enough.
 ```js
 const fx = createAmbientFX(canvas, {
     theme: 'Fireflies',
-    respectReduced: false,   // default true
+    reducedMotion: false,    // default true; set false to opt out of auto-degrade
 });
 ```
 
@@ -493,3 +493,67 @@ Presets that don't map well:
 
 If in doubt, mount both instances stacked and see which reads right in your
 scene.
+
+---
+
+## 16. Life-based curves for alpha and size (v1.6.0)
+
+Two optional fields on `AmbientConfig` sample a piecewise-linear curve at
+`life` (0 -> 1) and multiply the behavior's alpha/size outputs.
+
+```js
+fx.updateConfig({
+    // Fade in fast, hold, fade out slow.
+    alphaCurve: [0, 1, 1, 0],       // 4-point
+    // Grow from 60% to 140% of base size.
+    sizeCurve:  [0.6, 1.4],
+});
+```
+
+**Semantics.** `alphaCurve` is a MULTIPLIER on the behavior's built-in alpha
+(so it compounds with the EMBER/FLOAT/FALL fade envelope, MIST breathing,
+CHAOS flicker). `sizeCurve` is a MULTIPLIER on `p.size` at draw time.
+
+If you want to REPLACE the built-in envelope entirely, set `alphaCurve` to
+match, or set alpha values on the behavior via `updateConfig`. There is no
+"disable built-in envelope" flag -- v1.6.0 keeps every existing rendering
+byte-identical when curves are absent (backward compat).
+
+### `sampleCurve` directly
+
+```js
+import { sampleCurve } from '@zakkster/lite-ambient-fx';
+
+// Custom loop that samples a curve per frame:
+const c = [0, 1, 0];
+for (let i = 0; i < N; i++) {
+    const life = i / N;
+    const a = sampleCurve(c, life);
+    // ...
+}
+```
+
+Cost per sample: 5-10 arithmetic ops for 2- and 3-point curves; O(1) index
+math for N-point. Zero allocations.
+
+### fx-pro parity
+
+The v1.5.0 themes distilled from `@zakkster/lite-fx-pro` presets shipped
+without curves in v1.5.0 -- particles held fixed size across life. In v1.6.0
+each theme carries the same curve its fx-pro parent had:
+
+```js
+// v1.5.0 (flat):
+ShadowWisp: { size: 90, alpha: 0.5, ... }
+
+// v1.6.0 (matches shadow_wisp.json):
+ShadowWisp: {
+    size: 90, alpha: 0.5, ...,
+    sizeCurve:  [2.0, 7.5],           // wisps expand 2x -> 7.5x
+    alphaCurve: [0.0, 0.8, 0.0],      // fade in / fade out
+}
+```
+
+If you're translating a fresh fx-pro preset to an ambient theme (see
+recipe 15), copy `visuals.scaleCurve` -> `sizeCurve` and `visuals.alphaCurve`
+-> `alphaCurve` directly.
