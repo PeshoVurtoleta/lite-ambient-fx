@@ -201,6 +201,8 @@ export interface AmbientInstance {
     /** Change pointer reactivity live. Partial -- omitted keys keep their value. */
     setPointer(next: PointerSpec): void;
     readonly count: number;
+    /** Monotonic total particles spawned since mount. Diff per frame for a profiler counter. */
+    readonly spawned: number;
     readonly running: boolean;
     pause(): void;
     resume(): void;
@@ -330,6 +332,12 @@ export function sampleDepth(bands?: DepthBands): number;
 export function resolvePointer(spec?: PointerSpec | null): ResolvedPointer;
 
 /** Drop cached sprites by color, or the entire cache when `colors` is omitted. */
+/**
+ * Sprite-cache census. Cheap enough to poll every frame from a HUD or profiler
+ * counter. `retained` is how many colors are still claimed by a live instance.
+ */
+export function ambientSpriteCacheStats(): { colors: number; sprites: number; retained: number };
+
 export function clearAmbientSpriteCache(colors?: string[]): void;
 
 /** Merge a theme with overrides. `wind` merges shallowly. */

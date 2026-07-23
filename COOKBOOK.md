@@ -557,3 +557,171 @@ ShadowWisp: {
 If you're translating a fresh fx-pro preset to an ambient theme (see
 recipe 15), copy `visuals.scaleCurve` -> `sizeCurve` and `visuals.alphaCurve`
 -> `alphaCurve` directly.
+
+---
+
+## 17. Worker mode / OffscreenCanvas (v1.7.0)
+
+An ambient backdrop on an overlay host (a Twitch extension, a dashboard, an
+editor chrome) competes with whatever the host is already doing on the main
+thread. Worker mode moves the whole simulation and its rasterization off-thread
+via `transferControlToOffscreen`, so a busy main thread no longer stutters the
+atmosphere -- and the atmosphere no longer stutters the host.
+
+This lives on a **separate export path**. The core file stays zero-dependency;
+`@zakkster/lite-worker` is only pulled in if you import `/worker`.
+
+```js
+import { createAmbientFXWorker } from '@zakkster/lite-ambient-fx/worker';
+
+const fx = createAmbientFXWorker(document.getElementById('fx'), {
+    theme: 'Aurora',
+    pointer: { mode: 'repel', radius: 240, strength: 14 },
+    frameBudget: { targetMs: 20 },
+});
+
+await fx.ready;          // resolves once the worker has mounted the canvas
+fx.setTheme('Cosmic');   // same control surface as createAmbientFX
+```
+
+Install the peer when you use this path:
+
+```
+npm i @zakkster/lite-worker
+```
+
+### What differs from the main-thread instance
+
+The instance lives on another thread, so the synchronous getters serve the last
+snapshot rather than live state:
+
+```js
+fx.count;                    // last known, may lag one frame
+const snap = await fx.state();   // fresh read: theme, count, running,
+                                 // reducedMotion, spawned, config, spriteCache
+```
+
+Everything else matches: `setTheme`, `updateConfig`, `setPointer`,
+`setFrameBudget`, `pause`, `resume`, `destroy`.
+
+### What the worker entry handles for you
+
+- **Resize and DPR.** `adoptCanvas` forwards device-pixel size and dpr; the
+  instance re-derives its backing store and rescales particle positions exactly
+  as it does on the main thread.
+- **Visibility.** A worker's `requestAnimationFrame` is *not* throttled by the
+  host tab's visibility the way the main thread's is, so the worker pauses the
+  instance explicitly when the tab hides and resumes it when it returns. An
+  explicit `pause()` you called yourself is never undone by a visibility flip.
+- **Reduced motion.** `matchMedia` does not exist in a worker, so the main side
+  watches `(prefers-reduced-motion: reduce)` and forwards flips. Degrade and
+  restore behave identically to on-thread.
+- **Pointer.** Pointer events cannot reach a worker. The main side forwards
+  coordinates already relative to the canvas rect, coalesced to at most one
+  message per frame and only when the position changed. Nothing is sent while
+  `pointer.mode` is `'off'`.
+
+### Fallback
+
+Worker mode needs `Worker`, `OffscreenCanvas`, `canvas.transferControlToOffscreen`,
+and module-worker support. When any of those is missing, `createAmbientFXWorker`
+returns a main-thread instance behind the same interface, so you do not need two
+code paths:
+
+```js
+const fx = createAmbientFXWorker(canvas, { theme: 'Aurora' });
+fx.mode;    // 'worker' or 'main'
+```
+
+Pass `fallback: false` to make an unsupported environment throw instead.
+
+Check up front if you want to branch yourself:
+
+```js
+import { supportsWorkerMode } from '@zakkster/lite-ambient-fx/worker';
+if (supportsWorkerMode(canvas)) { /* ... */ }
+```
+
+### Why the worker body imports the core
+
+The worker body is serialized with `Function.prototype.toString()`, so it has to
+be self-contained. Rather than duplicating the behaviors into the worker (which
+would drift the moment a behavior changed), the body dynamically imports the
+real `AmbientFX.js` by absolute URL. Off-thread rendering is the same code as
+on-thread rendering by construction, and `test/15-worker_test.mjs` asserts it.
+
+---
+
+## 18. Wire the atmosphere into `@zakkster/lite-profiler`
+
+An integration **recipe, not a dependency** -- ambient-fx stays zero-dep. This
+is for consumers already running the profiler who want the atmosphere's cost and
+churn on the same timeline as the rest of their frame.
+
+Two things are worth counting: how many particles respawned this frame (churn
+tracks how hard the field is working), and how large the sprite cache has grown
+(the one structure that can drift upward over a long session).
+
+```js
+import { Profiler } from '@zakkster/lite-profiler';
+import { createAmbientFX, ambientSpriteCacheStats } from '@zakkster/lite-ambient-fx';
+
+// Phases and counters are registered once at construction -- dynamic
+// registration would allocate.
+const profiler = new Profiler(1024, ['ambient'], ['spawned', 'sprites']);
+
+const hSpawned = profiler.counterHandle('spawned');
+const hSprites = profiler.counterHandle('sprites');
+const hAmbient = profiler.handle('ambient');
+
+const fx = createAmbientFX(canvas, { theme: 'Aurora' });
+
+// `spawned` is monotonic, so diff it per frame.
+let lastSpawned = fx.spawned;
+
+function frame() {
+    profiler.beginFrame();
+
+    profiler.beginAt(hAmbient);
+    // ... your own work for this frame ...
+    profiler.endAt(hAmbient);
+
+    const spawned = fx.spawned;
+    profiler.countAt(hSpawned, spawned - lastSpawned);
+    lastSpawned = spawned;
+
+    profiler.countAt(hSprites, ambientSpriteCacheStats().sprites);
+
+    profiler.endFrame();
+    requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+```
+
+`ambientSpriteCacheStats()` returns `{ colors, sprites, retained }`. `retained`
+is the one to watch across a long session: it counts colors still claimed by a
+live instance, so it should track your palette size, not climb with the number
+of theme swaps you have done.
+
+Counters are deterministic and lower-is-better, so they gate exactly:
+
+```js
+import { assertNoRegression } from '@zakkster/lite-profiler';
+
+assertNoRegression(baseline, candidate, {
+    'counter.sprites.max': 0,       // an exact ceiling on cache growth
+    'counter.spawned.avg': 0.10,    // churn may drift 10%
+});
+```
+
+Note the ambient instance runs its own `requestAnimationFrame` loop, so the
+`ambient` phase above measures *your* frame, not the atmosphere's tick. To time
+the tick itself, register a custom behavior (recipe 13) and wrap its `tick` body
+in `beginAt`/`endAt`.
+
+In worker mode the counters live off-thread; read them from the snapshot instead:
+
+```js
+const snap = await fx.state();
+profiler.countAt(hSprites, snap.spriteCache.sprites);
+```

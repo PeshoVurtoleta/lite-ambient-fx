@@ -37,6 +37,24 @@ That's the whole surface for the common case. Full API below.
 
 ---
 
+## Worker mode (v1.7.0)
+
+Run the whole atmosphere off the main thread on an `OffscreenCanvas`:
+
+```js
+import { createAmbientFXWorker } from '@zakkster/lite-ambient-fx/worker';
+
+const fx = createAmbientFXWorker(canvas, { theme: 'Aurora' });
+await fx.ready;
+```
+
+This is a **separate export path**. The core file stays zero-dependency and
+single-file; `@zakkster/lite-worker` is an optional peer that is only resolved
+if you import `/worker`. When the environment cannot do worker mode,
+`createAmbientFXWorker` transparently returns a main-thread instance behind the
+same interface (`fx.mode` tells you which), so there is one code path either
+way. See COOKBOOK recipe 17.
+
 ## Table of contents
 
 - [What it looks like](#what-it-looks-like)

@@ -5,6 +5,87 @@ All notable changes to `@zakkster/lite-ambient-fx` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] -- 2026-07-23
+
+Worker mode. The last open item from the v1.4.0 roadmap: an atmosphere that runs
+entirely off the main thread, so an overlay host with a busy main thread no
+longer stutters the backdrop -- and the backdrop no longer stutters the host.
+
+### Added
+
+- **`@zakkster/lite-ambient-fx/worker`** -- a new export path exposing
+  `createAmbientFXWorker(canvas, options)`, built on `@zakkster/lite-worker`
+  v1.2.0's `adoptCanvas`/`onCanvas`. The canvas is handed to the worker with
+  `transferControlToOffscreen`; simulation and sprite rasterization both happen
+  off-thread.
+
+  The core file stays zero-dependency and single-file. `lite-worker` is an
+  *optional* peer, declared in `peerDependenciesMeta`, and is only resolved when
+  something imports `/worker`. Importing `@zakkster/lite-ambient-fx` pulls in
+  exactly what it pulled in before.
+
+  The worker body does not re-implement the behaviors. It is serialized with
+  `Function.prototype.toString()` and then dynamically imports the real
+  `AmbientFX.js` by absolute URL, so off-thread rendering is the same code as
+  on-thread rendering by construction rather than by discipline.
+
+  What the entry handles, because a worker has none of it natively:
+  resize/DPR (forwarded from `adoptCanvas`), visibility (a worker's
+  `requestAnimationFrame` is *not* throttled by host-tab visibility, so the
+  instance is paused explicitly -- an explicit `pause()` you called is never
+  undone by a visibility flip), reduced motion (`matchMedia` does not exist
+  off-thread, so flips are forwarded from the main side), and pointer input
+  (coordinates forwarded relative to the canvas rect, coalesced to at most one
+  message per frame, and only while a pointer mode is active).
+
+  `supportsWorkerMode(canvas)` probes the environment. When worker mode is not
+  available, `createAmbientFXWorker` returns a main-thread instance behind the
+  same interface (`fx.mode` reports which), so callers need one code path, not
+  two. Pass `fallback: false` to make an unsupported environment throw.
+
+- **`ambientSpriteCacheStats()`** -- `{ colors, sprites, retained }`. Cheap
+  enough to poll every frame. `retained` counts colors still claimed by a live
+  instance, which is the number that would climb if the cache ever leaked.
+
+- **`fx.spawned`** -- monotonic total particles spawned since mount. One integer
+  add on the per-death respawn path; never touched per-particle-per-frame. Diff
+  it per frame to feed a profiler counter.
+
+### Documentation
+
+- **COOKBOOK recipe 17** -- worker mode: mounting, the snapshot-based state
+  reads, what the entry handles for you, and the fallback path.
+- **COOKBOOK recipe 18** -- the `@zakkster/lite-profiler` integration recipe,
+  the other open v1.4.0 roadmap item. A *recipe, not a dependency*: documented
+  `countAt()` wiring for per-frame spawn churn and sprite-cache size, plus
+  `assertNoRegression` tolerances that gate cache growth at an exact ceiling.
+- The demo gains a worker-mode panel that lazily imports `/worker` on click,
+  mounts a second off-thread atmosphere, and polls its snapshot -- so the
+  separate-export-path claim is visible rather than asserted.
+
+### Tests
+
+- **`test/15-worker_test.mjs`** -- worker conformance. The real worker body is
+  driven with a mock lite-worker ctx and an OffscreenCanvas stub, and compared
+  against a main-thread instance built from the same config (blit counts and
+  sprite-size envelope must match). Also covers DPR, control-message forwarding,
+  reduced-motion degrade/restore off-thread, pointer forwarding and NaN
+  rejection, resize and visibility plumbing, and teardown. Plus a serialization
+  layer that round-trips the body through `Function.prototype.toString()` the
+  way lite-worker's Blob transport does, and asserts it closes over no
+  module-scope identifier.
+
+- **`test/16-gates_test.mjs`** -- the four standing package gates the v1.4.0
+  roadmap asked to run per version: visibility pause (including that a long
+  hidden gap is not integrated as one delta on resume), resize preservation
+  (fractional positions, DPR changes, and recovery from a zero-size box),
+  sprite-cache leak soak (a six-cycle theme-swap loop and a 400-step `lerpTheme`
+  sweep must both keep `retained` flat, and interleaved instance lifecycles must
+  strand nothing), and a reduced-motion snapshot across every shipped theme
+  including that the frame budget never restores above the reduced ceiling.
+
+Suite: 305 tests.
+
 ## [1.6.0] -- 2026-07-22
 
 Life-based curves for alpha and size. Six shipped themes now grow and fade

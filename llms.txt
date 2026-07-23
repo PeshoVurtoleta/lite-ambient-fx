@@ -260,3 +260,35 @@ pools, seconds-based integration, ground accumulation/melt (snow), splash/bounce
 lite-ambient-fx FALL is an ambient BACKDROP: AoS monomorphic particles, per-frame units,
 no ground, fixed recycled pool, sprite-cached drawImage, zero dependencies.
 Weather is the subject -> lite-snow / lite-rain. Weather is the background -> lite-ambient-fx.
+
+## Worker mode (v1.7.0)
+
+Separate export path: `@zakkster/lite-ambient-fx/worker`. The core file stays
+zero-dependency; `@zakkster/lite-worker` (^1.2.0) is an optional peer resolved
+only by this path.
+
+- `createAmbientFXWorker(canvas, options) -> AmbientWorkerInstance` -- transfers
+  the canvas with `transferControlToOffscreen` and runs simulation + sprite
+  rasterization on a worker. Same control surface as `createAmbientFX`
+  (`setTheme`, `updateConfig`, `setPointer`, `setFrameBudget`, `pause`, `resume`,
+  `destroy`), plus `ready` (Promise), `mode` ('worker' | 'main'), and
+  `state()` -> Promise<snapshot>. Synchronous getters serve the last snapshot.
+- `supportsWorkerMode(canvas) -> boolean`.
+- `options.fallback` (default true) returns a main-thread instance behind the
+  same interface when worker mode is unavailable; `false` throws instead.
+- The worker body is serialized via `Function.prototype.toString()` and then
+  dynamically imports the real `AmbientFX.js` by absolute URL, so off-thread and
+  on-thread rendering cannot drift.
+- Handled by the entry because a worker lacks them: resize/DPR, visibility
+  (worker rAF is not visibility-throttled, so the instance is paused
+  explicitly), reduced motion (forwarded from the main thread), pointer
+  (forwarded, rect-relative, coalesced to one message per frame).
+
+## Introspection (v1.7.0)
+
+- `ambientSpriteCacheStats() -> { colors, sprites, retained }`. `retained` is
+  colors still claimed by a live instance -- the number that climbs if the cache
+  leaks. Cheap enough to poll per frame.
+- `fx.spawned` -- monotonic spawn total since mount. Diff per frame for a
+  profiler counter. See COOKBOOK recipe 18 for the `@zakkster/lite-profiler`
+  wiring (a recipe, not a dependency).

@@ -14,7 +14,7 @@
  * (c) 2026 Zahary Shinikchiev. MIT.
  */
 
-export const VERSION = '1.6.0';
+export const VERSION = '1.7.0';
 
 // ============================================================
 //  THEME PRESETS
@@ -610,6 +610,19 @@ function getSprite(color, logicalSize, dpr) {
  * Drop sprites matching a color set (or the whole cache when `colors` is
  * omitted). Called on updateConfig({colors|spark}) and on destroy().
  */
+/**
+ * Sprite-cache census. Cheap (map sizes only), so it is safe to poll from a HUD
+ * or a profiler counter every frame. `colors` is how many distinct colors are
+ * rasterized, `sprites` the total canvases across all physical sizes, and
+ * `retained` how many colors are still claimed by a live instance -- if that
+ * number climbs without bound across theme swaps, something is leaking.
+ */
+export function ambientSpriteCacheStats() {
+    let sprites = 0;
+    for (const byPhysical of _sprites.values()) sprites += byPhysical.size;
+    return { colors: _sprites.size, sprites, retained: _spriteRefs.size };
+}
+
 export function clearAmbientSpriteCache(colors) {
     // A color still claimed by a live instance is dropped from the index but
     // its canvas is left intact -- particles holding it keep drawing until
@@ -2083,6 +2096,9 @@ export function createAmbientFX(canvas, options) {
     // Monomorphic particle pool.
     /** @type {Array<Object>} */
     const particles = [];
+    // Monotonic spawn tally. One integer add on the per-death respawn path;
+    // never touched per-particle-per-frame.
+    let spawned = 0;
 
     // Viewport state (logical CSS pixels).
     let W = 0;
@@ -2112,6 +2128,7 @@ export function createAmbientFX(canvas, options) {
             return getSprite(color, logicalSize, dpr);
         },
         respawn(p, isInit) {
+            spawned++;
             resetParticle(p, isInit);
         },
     };
@@ -2425,6 +2442,12 @@ export function createAmbientFX(canvas, options) {
         get theme() { return currentThemeName; },
 
         get count() { return particles.length; },
+
+        /**
+         * Monotonic total particles spawned since mount (initial fill included).
+         * Diff it per frame to feed a profiler counter; see COOKBOOK recipe 18.
+         */
+        get spawned() { return spawned; },
 
         get running() { return running; },
 

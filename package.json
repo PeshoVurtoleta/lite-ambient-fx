@@ -1,6 +1,6 @@
 {
   "name": "@zakkster/lite-ambient-fx",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "Zero-dependency fullscreen ambient particle atmospheres. Eleven themed presets across five behaviors (EMBER, MIST, FLOAT, CHAOS, FALL). Parallax depth bands, pointer repel/attract, runtime theme & behavior registries, prefers-reduced-motion auto-degrade, sprite-cached, DPR-aware. One file.",
   "type": "module",
   "main": "./AmbientFX.js",
@@ -12,11 +12,20 @@
       "node": "./AmbientFX.js",
       "import": "./AmbientFX.js",
       "default": "./AmbientFX.js"
-    }
+    },
+    "./worker": {
+      "types": "./AmbientFXWorker.d.ts",
+      "node": "./AmbientFXWorker.js",
+      "import": "./AmbientFXWorker.js",
+      "default": "./AmbientFXWorker.js"
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "AmbientFX.js",
     "AmbientFX.d.ts",
+    "AmbientFXWorker.d.ts",
+    "AmbientFXWorker.js",
     "CHANGELOG.md",
     "COOKBOOK.md",
     "LICENSE.txt",
@@ -89,6 +98,15 @@
   "devDependencies": {
     "@zakkster/lite-gc-profiler": "^1.10.3",
     "@zakkster/lite-leak": "^1.5.0",
-    "@zakkster/lite-signal": ">=1.5.0-beta.3"
+    "@zakkster/lite-signal": ">=1.5.0-beta.3",
+    "@zakkster/lite-worker": "^1.2.0"
+  },
+  "peerDependencies": {
+    "@zakkster/lite-worker": "^1.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@zakkster/lite-worker": {
+      "optional": true
+    }
   }
 }

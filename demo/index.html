@@ -514,7 +514,17 @@
         .theme-btn:is(.custom) {
             border-style: dashed;
         }
-    </style>
+
+        .wk-canvas {
+            width: 100%;
+            height: 7rem;
+            display: block;
+            margin: 0 0 0.5rem;
+            border: 1px solid var(--line);
+            border-radius: 0.25rem;
+            background: #05070a;
+        }
+</style>
 </head>
 <body>
 <canvas id="fxCanvas"></canvas>
@@ -627,6 +637,27 @@
     </div>
 
     <div class="p-section">
+        <div class="p-title">Worker mode <span class="pill" id="wkSupport">--</span></div>
+        <div class="p-desc">
+            <code>/worker</code> is a separate export path: the core stays zero-dependency, and
+            <code>@zakkster/lite-worker</code> is only fetched when you press this. The atmosphere
+            below runs entirely off the main thread on an <code>OffscreenCanvas</code>.
+        </div>
+        <canvas id="wkCanvas" class="wk-canvas"></canvas>
+        <div class="act-row">
+            <button class="act-btn" id="btnWorker" type="button">Mount off-thread</button>
+            <button class="act-btn" id="btnWorkerStop" type="button">Destroy</button>
+        </div>
+        <div class="readout">
+            <span>mode</span><span id="wkMode">--</span>
+            <span>theme</span><span id="wkTheme">--</span>
+            <span>count</span><span id="wkCount">--</span>
+            <span>spawned</span><span id="wkSpawned">--</span>
+            <span>sprite cache</span><span id="wkSprites">--</span>
+        </div>
+    </div>
+
+    <div class="p-section">
         <div class="p-title">Density &amp; Scale</div>
         <div class="ctrl">
             <div class="ctrl-head"><span>Count</span><span class="ctrl-val" id="vCount">--</span></div>
@@ -674,7 +705,9 @@
 <script type="importmap">
 {
   "imports": {
-    "@zakkster/lite-ambient-fx": "../AmbientFX.js"
+    "@zakkster/lite-ambient-fx": "../AmbientFX.js",
+    "@zakkster/lite-ambient-fx/worker": "../AmbientFXWorker.js",
+    "@zakkster/lite-worker": "https://esm.sh/@zakkster/lite-worker@1.2.0"
   }
 }
 
@@ -860,6 +893,7 @@
     if (id === currentTheme) return;
     currentTheme = id;
     fx.setTheme(id);
+    if (workerFx && !workerFx.destroyed) workerFx.setTheme(id);
     renderThemeSelect();
     syncSliders();
     syncBadges();
@@ -1128,6 +1162,81 @@
   // ── Boot ───────────────────────────────────────────────────
   // Every initial UI value is read back out of the instance -- nothing about the
   // starting state is hardcoded in the markup.
+  // ── Worker mode (v1.7.0) ───────────────────────────────────
+  // The /worker entry is imported lazily: nothing about lite-worker is fetched
+  // unless you actually press the button, which is the whole point of shipping
+  // it on a separate export path.
+  const $wkCanvas = document.getElementById("wkCanvas");
+  const $wkSupport = document.getElementById("wkSupport");
+  const $btnWorker = document.getElementById("btnWorker");
+  const $btnWorkerStop = document.getElementById("btnWorkerStop");
+  const $wkMode = document.getElementById("wkMode");
+  const $wkTheme = document.getElementById("wkTheme");
+  const $wkCount = document.getElementById("wkCount");
+  const $wkSpawned = document.getElementById("wkSpawned");
+  const $wkSprites = document.getElementById("wkSprites");
+
+  let workerFx = null;
+  let workerPoll = 0;
+
+  const canOffscreen =
+    typeof Worker === "function" &&
+    typeof OffscreenCanvas === "function" &&
+    typeof $wkCanvas.transferControlToOffscreen === "function";
+  $wkSupport.textContent = canOffscreen ? "supported" : "falls back";
+
+  async function mountWorker() {
+    if (workerFx) return;
+    $btnWorker.disabled = true;
+    $wkMode.textContent = "loading...";
+    try {
+      const { createAmbientFXWorker } = await import("@zakkster/lite-ambient-fx/worker");
+      workerFx = createAmbientFXWorker($wkCanvas, {
+        theme: currentTheme,
+        overrides: { count: 90 },
+      });
+      await workerFx.ready;
+      pollWorker();
+    } catch (err) {
+      $wkMode.textContent = "failed";
+      $wkTheme.textContent = String(err && err.message ? err.message : err).slice(0, 40);
+    } finally {
+      $btnWorker.disabled = false;
+    }
+  }
+
+  // The instance lives off-thread, so its state is fetched, not read. 4 Hz is
+  // plenty for a readout and keeps the control plane quiet.
+  function pollWorker() {
+    if (workerPoll) return;
+    workerPoll = setInterval(async () => {
+      if (!workerFx || workerFx.destroyed) return;
+      const snap = await workerFx.state();
+      if (!snap) return;
+      $wkMode.textContent = workerFx.mode;
+      $wkTheme.textContent = snap.theme;
+      $wkCount.textContent = String(snap.count);
+      $wkSpawned.textContent = String(snap.spawned);
+      $wkSprites.textContent = snap.spriteCache
+        ? snap.spriteCache.sprites + " / " + snap.spriteCache.retained + " held"
+        : "--";
+    }, 250);
+  }
+
+  function stopWorker() {
+    if (workerPoll) { clearInterval(workerPoll); workerPoll = 0; }
+    if (workerFx) { workerFx.destroy(); workerFx = null; }
+    $wkMode.textContent = "--";
+    $wkTheme.textContent = "--";
+    $wkCount.textContent = "--";
+    $wkSpawned.textContent = "--";
+    $wkSprites.textContent = "--";
+  }
+
+  $btnWorker.addEventListener("click", mountWorker);
+  $btnWorkerStop.addEventListener("click", stopWorker);
+  window.addEventListener("pagehide", stopWorker);
+
   renderThemeButtons();
   syncSliders();
   syncBadges();
