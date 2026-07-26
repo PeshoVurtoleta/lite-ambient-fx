@@ -1,7 +1,7 @@
 # @zakkster/lite-ambient-fx
 
-> Fullscreen ambient particle atmospheres in one file. Six themed presets
-> across four behaviors (EMBER, MIST, FLOAT, CHAOS) plus a registry hook
+> Fullscreen ambient particle atmospheres in one file. Twenty-three themed presets
+> across five behaviors (EMBER, MIST, FLOAT, CHAOS, FALL) plus a registry hook
 > for adding your own. Zero dependencies. Sprite-cached radial gradients,
 > zero-alloc render loop, monomorphic particle shape, DPR-aware,
 > resize-preserving, visibility-paused, delta-time clamped.

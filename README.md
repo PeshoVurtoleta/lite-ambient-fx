@@ -1,6 +1,6 @@
 # @zakkster/lite-ambient-fx
 
-> Fullscreen ambient particle atmospheres. Six themed presets across four behaviors. Sprite-cached, DPR-aware, resize-preserving, visibility-paused. One file. Zero dependencies.
+> Fullscreen ambient particle atmospheres. Twenty-three themed presets across five behaviors (EMBER, MIST, FLOAT, CHAOS, FALL). Sprite-cached, DPR-aware, resize-preserving, visibility-paused. One file. Zero dependencies.
 
 [![npm version](https://img.shields.io/npm/v/@zakkster/lite-ambient-fx.svg?style=for-the-badge&color=latest)](https://www.npmjs.com/package/@zakkster/lite-ambient-fx)
 ![Zero-GC](https://img.shields.io/badge/Zero--GC-Hot%20path-00C853?style=for-the-badge&logo=leaf&logoColor=white)
@@ -14,7 +14,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
 
-Extracted from a scratch-card game where the atmosphere layer had to render behind live UI at 60fps without touching the reactive graph. Six presets ship out of the box; every knob is live-tweakable; the whole thing fits in one `<script type="module">` and one `<canvas>` tag.
+Extracted from a scratch-card game where the atmosphere layer had to render behind live UI at 60fps without touching the reactive graph. Twenty-three presets ship out of the box; every knob is live-tweakable; the whole thing fits in one `<script type="module">` and one `<canvas>` tag.
 
 ```
 npm install @zakkster/lite-ambient-fx
@@ -61,7 +61,7 @@ way. See COOKBOOK recipe 17.
 - [Why this exists](#why-this-exists)
 - [What you get](#what-you-get)
 - [The six shipped presets](#the-six-shipped-presets)
-- [The four behaviors](#the-four-behaviors)
+- [The five behaviors](#the-five-behaviors)
 - [API reference](#api-reference)
 - [Configuration knobs](#configuration-knobs)
 - [Sizing, DPR, and resize](#sizing-dpr-and-resize)
@@ -142,6 +142,12 @@ Reach for **`lite-snow` / `lite-rain`** when the weather *is* the thing — when
 Reach for **`lite-ambient-fx`** when the weather is *behind* the thing — an atmosphere layer that sits under live UI at 60fps, next to Fire and Aurora, sharing one theme picker, one sprite cache, and one zero-dependency file.
 
 The `Snow` and `Rain` presets here are backdrops. They are the cheap cousin, and that is on purpose.
+
+### Why this stays one zero-dependency file
+
+A recurring temptation is to rebase the particle store onto a shared core — `@zakkster/lite-particles` ships a reusable structure-of-arrays (SoA) column layout, and the sibling `lite-confetti` rebases onto it. `lite-ambient-fx` deliberately does **not**. The zero-dependency single-file identity *is* the product: an atmosphere you drop into an overlay host with no transitive install, no version matrix, one file to audit.
+
+If particle counts ever genuinely outgrow the current AoS monomorphic pool, the SoA columns get **vendored** into this file, not imported. As of v1.8.0 they do not need to be: the heaviest behavior's tick costs roughly **0.1 ms/frame at 16,000 particles** — well past a realistic parallax scene of 500–2,000 — with **zero major collections**, and the real per-frame cost is dominated by `drawImage` compositing, which no storage layout changes. Confetti rebases; ambient-fx vendors. This is a settled decision, not an open question.
 
 ---
 
@@ -622,17 +628,19 @@ dialog.addEventListener("close", () => fx.resume());
 
 ## Testing
 
-Three test files under `test/`:
-
-- **`01-config_test.mjs`** — DOM-free pure-helper tests. THEMES surface, `mergeThemeConfig` semantics, `validateConfig` throws, sine LUT wrap, `envelopeAlpha` curves per behavior, VERSION parity with `package.json`.
-- **`02-runtime_test.mjs`** — full lifecycle under a minimal DOM shim (mocked canvas 2D context, `requestAnimationFrame`, `document`). Boot, theme swap, config update, pause/resume, destroy, dt clamping across a simulated 10-second tab freeze.
-- **`03-registry_test.mjs`** — `BEHAVIORS` surface, `registerBehavior` argument validation, end-to-end custom behavior use, particle shape monomorphism, and the `FrameContext` spawn/respawn contract.
-
-70 tests across all three files.
+Sixteen `node:test` suites under `test/` (run by `npm test`) cover the pure helpers, the full lifecycle under a minimal DOM shim, the behavior/registry contract, the color pipeline, frame budget, blend modes, curves, worker mode, and four package gates — visibility-pause, resize-preservation, sprite-cache leak soak, and the reduced-motion snapshot. VERSION parity with `package.json` is asserted, so a forgotten bump fails the suite.
 
 ```
 npm test
 ```
+
+The zero-GC, allocation, and leak budgets are proven separately by a standalone gate the fast suite does not run:
+
+```
+npm run torture      # node --expose-gc test/torture.mjs
+```
+
+It must print `ok`. Against every shipped behavior it proves a tick triggers **zero** minor or major collections (0 B/op steady state) with the longest GC pause inside **4 ms**, and that **4096** create/dispose cycles return `tracker.size()` to zero with no orphaned listener, timer, or observer. A run without `--expose-gc`, or any missed budget, fails loudly: a missing gate is a failure, not a pass.
 
 The DOM shim is intentionally minimal — this is a canvas-only package, and unit-level canvas fidelity would be a maintenance sink. Visual regressions are caught by the demo.
 
@@ -650,7 +658,7 @@ Part of the [`@zakkster`](https://www.npmjs.com/~zakkster) zero-GC stack: **[`li
 
 **Why single-file with no dependencies?** Because that's what makes the package trivial to drop into anything — a landing page, an Astro island, a Vue app, a Twitch extension, a Codepen. Bundlers can tree-shake nothing away since it's already one file, but they also can't accidentally pull in a duplicate of another package.
 
-**Can I use my own palette instead of one of the six presets?** Yes — pass `overrides: { colors: [...], spark: "..." }` at construction, or call `fx.updateConfig({ colors: [...] })` later. Any valid CSS color string works (hex, rgb, hsl, oklch on modern browsers).
+**Can I use my own palette instead of one of the built-in presets?** Yes — pass `overrides: { colors: [...], spark: "..." }` at construction, or call `fx.updateConfig({ colors: [...] })` later. Any valid CSS color string works (hex, rgb, hsl, oklch on modern browsers).
 
 **Do I need `lite-viewport` or a shared ticker?** No — this package handles DPR, resize, and its own RAF loop internally. If you want one shared RAF across multiple ambient layers, use `pause()` and drive `_tickManually` yourself (roadmap for v1.1).
 
@@ -660,7 +668,7 @@ Part of the [`@zakkster`](https://www.npmjs.com/~zakkster) zero-GC stack: **[`li
 
 **Is `lite-ambient-fx` a `tsparticles` replacement?** No. `tsparticles` is a general-purpose particle engine with dozens of shape/interaction modules. `lite-ambient-fx` is six curated atmospheres, one file, no config language. Different tier.
 
-**Can I run it in a Web Worker with OffscreenCanvas?** Not out of the box — the module reads `window.devicePixelRatio` and `document.hidden` directly. Porting is straightforward if you want to try it; PRs welcome.
+**Can I run it in a Web Worker with OffscreenCanvas?** Yes, as of v1.7.0 — import `createAmbientFXWorker` from `@zakkster/lite-ambient-fx/worker`. It hands the canvas off with `transferControlToOffscreen` and runs the simulation and sprite rasterization entirely off the main thread; resize, DPR, visibility, reduced motion, and pointer input are forwarded for you. `@zakkster/lite-worker` is an optional peer dependency, resolved only when you import the `/worker` path. See [Worker mode](#worker-mode-v170).
 
 ---
 

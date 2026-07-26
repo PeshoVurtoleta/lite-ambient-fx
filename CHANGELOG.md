@@ -5,6 +5,43 @@ All notable changes to `@zakkster/lite-ambient-fx` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] -- 2026-07-26
+
+Hardening and honesty release. No API changes: every import, theme, and behavior
+behaves exactly as in 1.7.0. What changed is how the zero-GC and leak budgets are
+proven -- and one architectural decision written down so it stops being reopened.
+
+### Added
+
+- **`test/torture.mjs`** -- a standalone budget gate, run with `npm run torture`
+  (`node --expose-gc test/torture.mjs`). It prints `ok` only when every shipped
+  behavior's tick triggers zero minor and zero major GC (0 B/op steady state)
+  with the longest GC pause inside 4 ms, and when 4096 create/dispose cycles
+  return the leak tracker to zero live handles with no orphaned listener, timer,
+  or observer. Run without `--expose-gc`, or any missed budget, exits non-zero
+  without printing `ok` -- a missing gate is a failure, not a pass.
+
+### Changed
+
+- `npm test`'s glob narrowed from `test/*.mjs` to `test/*_test.mjs` so the
+  standalone `torture.mjs` gate (which requires `--expose-gc`) is not swept into
+  the default `node:test` run. The sixteen suite files are unaffected.
+- README: the stale "three test files / 70 tests" note is replaced with an
+  accurate description of the suite and the new torture gate; **Ecosystem
+  positioning** now records why `lite-ambient-fx` would vendor any future SoA
+  layout rather than depend on a shared particle core.
+
+### Decided
+
+- **Storage stays AoS; SoA is not adopted.** A benchmark put the heaviest
+  behavior's tick at ~0.1 ms/frame at 16,000 particles (realistic scenes run
+  500-2,000) with zero major collections. Real frame cost is dominated by
+  `drawImage` compositing, which no storage layout changes, so a
+  structure-of-arrays rewrite would optimize under 1% of the frame at the cost of
+  a breaking behavior contract. Should counts ever warrant it, the columns will
+  be vendored into this single file, never imported. The zero-dependency
+  single-file identity is the moat.
+
 ## [1.7.0] -- 2026-07-23
 
 Worker mode. The last open item from the v1.4.0 roadmap: an atmosphere that runs

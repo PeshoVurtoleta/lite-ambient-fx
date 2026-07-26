@@ -1,9 +1,9 @@
 /**
  * @zakkster/lite-ambient-fx
  *
- * Full-screen ambient particle atmospheres in one file. Eleven themed presets
- * (Fire, Night, Ice, Frost, Toxic, Void, Dust, Aurora, Abyss, Snow, Rain) across
- * five particle behaviors (EMBER, MIST, FLOAT, CHAOS, FALL), plus registry hooks
+ * Full-screen ambient particle atmospheres in one file. Twenty-three themed
+ * presets across five particle behaviors (EMBER, MIST, FLOAT, CHAOS, FALL), plus
+ * registry hooks
  * for custom themes (`registerTheme`) and behaviors (`registerBehavior`).
  * Parallax depth bands and zero-alloc pointer reactivity (repel / attract).
  * Sprite-cached radial gradients, zero-alloc render loop, monomorphic
@@ -14,7 +14,7 @@
  * (c) 2026 Zahary Shinikchiev. MIT.
  */
 
-export const VERSION = '1.7.0';
+export const VERSION = '1.8.0';
 
 // ============================================================
 //  THEME PRESETS

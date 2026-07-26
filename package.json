@@ -1,7 +1,7 @@
 {
   "name": "@zakkster/lite-ambient-fx",
-  "version": "1.7.0",
-  "description": "Zero-dependency fullscreen ambient particle atmospheres. Eleven themed presets across five behaviors (EMBER, MIST, FLOAT, CHAOS, FALL). Parallax depth bands, pointer repel/attract, runtime theme & behavior registries, prefers-reduced-motion auto-degrade, sprite-cached, DPR-aware. One file.",
+  "version": "1.8.0",
+  "description": "Zero-dependency fullscreen ambient particle atmospheres. Twenty-three themed presets across five behaviors (EMBER, MIST, FLOAT, CHAOS, FALL). Parallax depth bands, pointer repel/attract, runtime theme & behavior registries, prefers-reduced-motion auto-degrade, sprite-cached, DPR-aware. One file.",
   "type": "module",
   "main": "./AmbientFX.js",
   "module": "./AmbientFX.js",
@@ -34,7 +34,8 @@
   ],
   "sideEffects": false,
   "scripts": {
-    "test": "node --test 'test/*.mjs'",
+    "test": "node --test 'test/*_test.mjs'",
+    "torture": "node --expose-gc test/torture.mjs",
     "demo": "npx serve ."
   },
   "keywords": [
